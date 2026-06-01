@@ -7,7 +7,7 @@
 <!ENTITY packageName "msm-free-0.1.12-x86_64-1">
 <!ENTITY packageFile "&packageName;.txz">
 <!ENTITY packageURL "https://github.com/&githubRepo;/releases/download/&releaseTag;/&packageFile;">
-<!ENTITY packageSHA256 "2d4889a6b27d0695d568fc23a8a4e584c03c17d11bd6caca93216cb648ed65f8">
+<!ENTITY packageSHA256 "06645df238500e347ffd41d22db89c8cc947962d6fbdfe01af6bf1ed81ce2130">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="https://raw.githubusercontent.com/&githubRepo;/main/msm-free.plg" launch="Settings/&name;" icon="network-wired" min="6.12.0">
   <CHANGES>
@@ -19,6 +19,7 @@
 - 增加回归测试，覆盖运行时 Compatible 项不会进入供应商配置管理列表。
 - 清理发布包离线预览/示例日志中的真实供应商域名，改为中性示例域名。
 - 初始化时如果发现旧版 msm-free 生成的最小 Mihomo 配置，会自动升级为完整模板并保留已有供应商段。
+- 初始化时如果发现空的 Mihomo config.yaml，会自动修复为完整默认模板。
     ]]>
   </CHANGES>
 

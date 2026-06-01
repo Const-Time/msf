@@ -207,6 +207,35 @@ proxy-providers:
 	}
 }
 
+func TestEnsureBaseLayoutUpgradesEmptyMihomoConfig(t *testing.T) {
+	dataDir := t.TempDir()
+	configPath := filepath.Join(dataDir, "configs/mihomo/config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	app, err := New(Options{DataDir: dataDir, Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	if err := app.EnsureBaseLayout(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(upgraded)
+	for _, want := range []string{"FilterHK: &FilterHK", "UrlTest: &UrlTest", "rule-providers:", "name: 节点选择", "proxy-providers: {}"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("empty Mihomo config was not repaired, missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestEnsureSetupProviderArtifactsBackfillsManualProvider(t *testing.T) {
 	app := newTestApp(t)
 	cfg := SetupConfig{
