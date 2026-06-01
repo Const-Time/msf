@@ -93,13 +93,11 @@ func (a *App) ensureDefaultConfigs() error {
 		return err
 	}
 	files := map[string]string{
-		"configs/app.yaml":                 a.renderAppYAML(cfg),
-		"configs/mihomo/config.yaml":       a.renderMihomoYAML(cfg),
-		"configs/mihomo/phone_config.yaml": a.renderMihomoPhoneYAML(cfg),
-		"configs/mosdns/config.yaml":       a.renderMosDNSYAML(cfg),
-		"configs/network/network.yaml":     a.renderNetworkYAML(cfg),
-		"configs/network/network.nft":      a.renderNFT(cfg),
-		"configs/singbox/config.json":      renderDisabledSingBoxJSON(),
+		"configs/app.yaml":             a.renderAppYAML(cfg),
+		"configs/mosdns/config.yaml":   a.renderMosDNSYAML(cfg),
+		"configs/network/network.yaml": a.renderNetworkYAML(cfg),
+		"configs/network/network.nft":  a.renderNFT(cfg),
+		"configs/singbox/config.json":  renderDisabledSingBoxJSON(),
 	}
 	for rel, content := range files {
 		path := filepath.Join(a.DataDir, rel)
@@ -112,7 +110,67 @@ func (a *App) ensureDefaultConfigs() error {
 			}
 		}
 	}
+	if err := a.ensureDefaultMihomoConfig("configs/mihomo/config.yaml", a.renderMihomoYAML(cfg)); err != nil {
+		return err
+	}
+	if err := a.ensureDefaultMihomoConfig("configs/mihomo/phone_config.yaml", a.renderMihomoPhoneYAML(cfg)); err != nil {
+		return err
+	}
 	return a.ensureMosDNSRuleFiles()
+}
+
+func (a *App) ensureDefaultMihomoConfig(rel, desired string) error {
+	path := filepath.Join(a.DataDir, rel)
+	existing, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return err
+		}
+		return os.WriteFile(path, []byte(desired), 0644)
+	}
+	if err != nil {
+		return err
+	}
+	if !shouldUpgradeGeneratedMihomoConfig(string(existing)) {
+		return nil
+	}
+	if providers, ok := extractMihomoProxyProvidersSection(string(existing)); ok {
+		desired = replaceMihomoProxyProviders(desired, providers)
+	}
+	return os.WriteFile(path, []byte(desired), 0644)
+}
+
+func shouldUpgradeGeneratedMihomoConfig(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return true
+	}
+	if strings.Contains(content, "FilterHK: &FilterHK") && strings.Contains(content, "UrlTest: &UrlTest") && strings.Contains(content, "rule-providers:") {
+		return false
+	}
+	if strings.Contains(content, "# msm-free generated Mihomo config") {
+		return true
+	}
+	if trimmed == "mode: rule" || trimmed == "proxy-providers: {}" || trimmed == "mode: rule\nproxy-providers: {}" {
+		return true
+	}
+	return false
+}
+
+func extractMihomoProxyProvidersSection(content string) (string, bool) {
+	idx := strings.LastIndex(content, "\nproxy-providers:")
+	if idx >= 0 {
+		idx++
+	} else if strings.HasPrefix(content, "proxy-providers:") {
+		idx = 0
+	} else {
+		return "", false
+	}
+	section := strings.TrimSpace(content[idx:])
+	if section == "" {
+		return "", false
+	}
+	return section + "\n", true
 }
 
 func (a *App) writeGeneratedConfigs(cfg SetupConfig) error {

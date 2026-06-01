@@ -155,6 +155,58 @@ func TestSetupDefaultsMatchWebUIFakeIPRanges(t *testing.T) {
 	}
 }
 
+func TestEnsureBaseLayoutWritesFullMihomoTemplate(t *testing.T) {
+	app := newTestApp(t)
+	cfg, err := os.ReadFile(filepath.Join(app.DataDir, "configs/mihomo/config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(cfg)
+	for _, want := range []string{"FilterHK: &FilterHK", "UrlTest: &UrlTest", "rule-providers:", "name: 节点选择", "proxy-providers: {}"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("default Mihomo config missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestEnsureBaseLayoutUpgradesGeneratedFallbackMihomoConfig(t *testing.T) {
+	dataDir := t.TempDir()
+	configPath := filepath.Join(dataDir, "configs/mihomo/config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	oldConfig := `# msm-free generated Mihomo config
+mode: rule
+proxy-providers:
+  airport:
+    type: http
+    url: "https://example.com/sub.yaml"
+    interval: 3600
+    path: './proxy_providers/airport.yaml'
+`
+	if err := os.WriteFile(configPath, []byte(oldConfig), 0644); err != nil {
+		t.Fatal(err)
+	}
+	app, err := New(Options{DataDir: dataDir, Version: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(app.Close)
+	if err := app.EnsureBaseLayout(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(upgraded)
+	for _, want := range []string{"FilterHK: &FilterHK", "UrlTest: &UrlTest", "rule-providers:", "name: 节点选择", "airport:", "https://example.com/sub.yaml"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("upgraded Mihomo config missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestEnsureSetupProviderArtifactsBackfillsManualProvider(t *testing.T) {
 	app := newTestApp(t)
 	cfg := SetupConfig{
@@ -864,6 +916,16 @@ func TestMihomoProviderConfigManagementCreatesHistory(t *testing.T) {
 	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), `"name":"airport"`) || !strings.Contains(list.Body.String(), `"name":"directlist"`) {
 		t.Fatalf("providers list mismatch: status=%d body=%s", list.Code, list.Body.String())
 	}
+	var listBody map[string]any
+	_ = json.Unmarshal(list.Body.Bytes(), &listBody)
+	proxyProviders := listBody["proxy_providers"].([]any)
+	gotProxyProviderNames := make([]string, 0, len(proxyProviders))
+	for _, raw := range proxyProviders {
+		gotProxyProviderNames = append(gotProxyProviderNames, raw.(map[string]any)["name"].(string))
+	}
+	if !reflect.DeepEqual(gotProxyProviderNames, []string{"airport"}) {
+		t.Fatalf("proxy provider config management must only list config providers, got %#v", gotProxyProviderNames)
+	}
 	var count int
 	if err := app.DB.QueryRow(`select count(*) from config_histories where service='mihomo' and file_path='configs/mihomo/config.yaml'`).Scan(&count); err != nil {
 		t.Fatal(err)
@@ -1306,6 +1368,7 @@ func newFakeMihomoController(t *testing.T) *httptest.Server {
 		case "/providers/proxies":
 			_ = json.NewEncoder(w).Encode(map[string]any{"providers": map[string]any{
 				"airport": map[string]any{"name": "airport", "vehicleType": "HTTP", "updatedAt": "2026-05-30T10:00:00Z", "proxies": []any{}},
+				"Spotify": map[string]any{"name": "Spotify", "type": "Proxy", "vehicleType": "Compatible", "updatedAt": "0001-01-01T00:00:00Z", "proxies": []any{}},
 			}})
 		case "/providers/proxies/airport":
 			_ = json.NewEncoder(w).Encode(map[string]any{"name": "airport", "vehicleType": "HTTP", "updatedAt": "2026-05-30T10:00:00Z", "proxies": []any{}})

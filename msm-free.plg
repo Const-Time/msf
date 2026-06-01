@@ -1,22 +1,24 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name "msm-free">
 <!ENTITY author "luochuhan">
-<!ENTITY version "0.1.11">
+<!ENTITY version "0.1.12">
 <!ENTITY githubRepo "scoltzero/msm-free">
-<!ENTITY releaseTag "v0.1.11">
-<!ENTITY packageName "msm-free-0.1.11-x86_64-1">
+<!ENTITY releaseTag "v0.1.12">
+<!ENTITY packageName "msm-free-0.1.12-x86_64-1">
 <!ENTITY packageFile "&packageName;.txz">
 <!ENTITY packageURL "https://github.com/&githubRepo;/releases/download/&releaseTag;/&packageFile;">
-<!ENTITY packageSHA256 "7a58fcb3fb486ea1881ff6b6fa0e6c093a25d3fd462e4876daa371df972ce7b1">
+<!ENTITY packageSHA256 "2d4889a6b27d0695d568fc23a8a4e584c03c17d11bd6caca93216cb648ed65f8">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="https://raw.githubusercontent.com/&githubRepo;/main/msm-free.plg" launch="Settings/&name;" icon="network-wired" min="6.12.0">
   <CHANGES>
     <![CDATA[
-### msm-free 0.1.11
-- 系统诊断页对齐原版，只保留配置目录、配置文件、依赖项、端口、磁盘空间和文件权限 6 项检查。
-- 移除最近错误日志、服务状态和 nftables 状态对诊断健康度的影响，避免 Mihomo 普通告警造成系统误报。
-- MosDNS 规则分类对齐原版个人名单顺序，将广告拦截和在线分流改为特殊分类返回。
-- 保留旧版规则分类 URL 的兼容响应，避免历史页面或书签访问异常。
+### msm-free 0.1.12
+- 修复 Mihomo「管理代理供应商」弹窗把策略组误显示为供应商的问题。
+- 代理供应商配置管理现在只展示配置文件中的 proxy-providers，避免 Spotify、Telegram、default 等策略组混入。
+- 保留运行时供应商状态用于概览统计，并过滤 Mihomo 控制器返回的 Compatible 类型策略组。
+- 增加回归测试，覆盖运行时 Compatible 项不会进入供应商配置管理列表。
+- 清理发布包离线预览/示例日志中的真实供应商域名，改为中性示例域名。
+- 初始化时如果发现旧版 msm-free 生成的最小 Mihomo 配置，会自动升级为完整模板并保留已有供应商段。
     ]]>
   </CHANGES>
 
@@ -56,8 +58,8 @@ set +e
 if [ -x /etc/rc.d/rc.msm-free ]; then
   /etc/rc.d/rc.msm-free stop
 fi
-removepkg msm-free-0.1.11-x86_64-1
-rm -f /boot/config/plugins/msm-free/msm-free-0.1.11-x86_64-1.txz
+removepkg msm-free-0.1.12-x86_64-1
+rm -f /boot/config/plugins/msm-free/msm-free-0.1.12-x86_64-1.txz
 echo "msm-free plugin removed. Persistent data remains under /mnt/user/appdata/msm-free unless you delete it manually."
       ]]>
     </INLINE>

@@ -232,13 +232,4 @@ rules:
   - DOMAIN-KEYWORD,tracker,DIRECT
   - MATCH,漏网之鱼
 # 节点订阅
-proxy-providers:
-  机场名称1:
-    url: '机场订阅'
-    type: http
-    interval: 3600
-    health-check:
-      enable: true
-      url: http://detectportal.firefox.com/success.txt
-      interval: 120
-    path: './proxy_providers/sub.yaml'
+proxy-providers: {}
