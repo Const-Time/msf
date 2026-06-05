@@ -96,13 +96,14 @@ func (a *App) ensureDefaultConfigs() error {
 		return err
 	}
 	files := map[string]string{
-		"configs/app.yaml":                 a.renderAppYAML(cfg),
-		"configs/mihomo/config.yaml":       a.renderMihomoYAML(cfg),
-		"configs/mihomo/phone_config.yaml": a.renderMihomoPhoneYAML(cfg),
-		"configs/mosdns/config.yaml":       a.renderMosDNSYAML(cfg),
-		"configs/network/network.yaml":     a.renderNetworkYAML(cfg),
-		"configs/network/network.nft":      a.renderNFT(cfg),
-		"configs/singbox/config.json":      renderDisabledSingBoxJSON(),
+		"configs/app.yaml":             a.renderAppYAML(cfg),
+		"configs/mosdns/config.yaml":   a.renderMosDNSYAML(cfg),
+		"configs/network/network.yaml": a.renderNetworkYAML(cfg),
+		"configs/network/network.nft":  a.renderNFT(cfg),
+		"configs/singbox/config.json":  renderDisabledSingBoxJSON(),
+	}
+	if a.mihomoConfigMode() != "custom" {
+		files["configs/mihomo/config.yaml"] = a.renderMihomoYAML(cfg)
 	}
 	for rel, content := range files {
 		path := filepath.Join(a.DataDir, rel)
@@ -124,13 +125,14 @@ func (a *App) writeGeneratedConfigs(cfg SetupConfig) error {
 		return err
 	}
 	files := map[string]string{
-		"configs/app.yaml":                 a.renderAppYAML(cfg),
-		"configs/mihomo/config.yaml":       a.renderMihomoYAML(cfg),
-		"configs/mihomo/phone_config.yaml": a.renderMihomoPhoneYAML(cfg),
-		"configs/mosdns/config.yaml":       a.renderMosDNSYAML(cfg),
-		"configs/network/network.yaml":     a.renderNetworkYAML(cfg),
-		"configs/network/network.nft":      a.renderNFT(cfg),
-		"configs/singbox/config.json":      renderDisabledSingBoxJSON(),
+		"configs/app.yaml":             a.renderAppYAML(cfg),
+		"configs/mosdns/config.yaml":   a.renderMosDNSYAML(cfg),
+		"configs/network/network.yaml": a.renderNetworkYAML(cfg),
+		"configs/network/network.nft":  a.renderNFT(cfg),
+		"configs/singbox/config.json":  renderDisabledSingBoxJSON(),
+	}
+	if a.mihomoConfigMode() != "custom" {
+		files["configs/mihomo/config.yaml"] = a.renderMihomoYAML(cfg)
 	}
 	if manual := renderMihomoManualProviderYAML(cfg.MihomoProxies); strings.TrimSpace(manual) != "" {
 		files["configs/mihomo/proxy_providers/msm_manual.yaml"] = manual
@@ -190,10 +192,6 @@ func (a *App) renderMihomoYAML(cfg SetupConfig) string {
 		return renderMihomoTemplate(template, cfg)
 	}
 	return renderMihomoFallbackYAML(cfg)
-}
-
-func (a *App) renderMihomoPhoneYAML(cfg SetupConfig) string {
-	return a.renderMihomoYAML(cfg)
 }
 
 func renderMihomoTemplate(template string, cfg SetupConfig) string {

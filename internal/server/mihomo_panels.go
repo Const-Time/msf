@@ -807,7 +807,7 @@ func (a *App) handleMihomoProxyProviderPut(w http.ResponseWriter, r *http.Reques
 }
 
 func (a *App) handleMihomoProxyProviderDelete(w http.ResponseWriter, r *http.Request) {
-	a.writeMihomoProviderDelete(w, r.PathValue("name"), "proxy-providers")
+	a.writeMihomoProviderDelete(w, r, r.PathValue("name"), "proxy-providers")
 }
 
 func (a *App) handleMihomoProxyProviderUpdate(w http.ResponseWriter, r *http.Request) {
@@ -840,7 +840,7 @@ func (a *App) handleMihomoRuleProviderPut(w http.ResponseWriter, r *http.Request
 }
 
 func (a *App) handleMihomoRuleProviderDelete(w http.ResponseWriter, r *http.Request) {
-	a.writeMihomoProviderDelete(w, r.PathValue("name"), "rule-providers")
+	a.writeMihomoProviderDelete(w, r, r.PathValue("name"), "rule-providers")
 }
 
 func (a *App) handleMihomoRuleProviderUpdate(w http.ResponseWriter, r *http.Request) {
@@ -877,10 +877,11 @@ func (a *App) writeMihomoProviderUpsert(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusBadRequest, "write_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "restart_required": true, "data": provider})
+	_, _ = a.Services.Restart(r.Context(), "mihomo")
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "restart_required": false, "data": provider, "mode": a.mihomoConfigModePayload()})
 }
 
-func (a *App) writeMihomoProviderDelete(w http.ResponseWriter, name, section string) {
+func (a *App) writeMihomoProviderDelete(w http.ResponseWriter, r *http.Request, name, section string) {
 	if strings.TrimSpace(name) == "" {
 		writeError(w, http.StatusBadRequest, "bad_request", "provider name required")
 		return
@@ -893,7 +894,8 @@ func (a *App) writeMihomoProviderDelete(w http.ResponseWriter, name, section str
 		writeError(w, http.StatusBadRequest, "write_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "restart_required": true})
+	_, _ = a.Services.Restart(r.Context(), "mihomo")
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "restart_required": false, "mode": a.mihomoConfigModePayload()})
 }
 
 func (a *App) writeMihomoProviderRuntimeUpdate(w http.ResponseWriter, name, kind string) {
@@ -1004,6 +1006,9 @@ func sanitizeProviderName(name string) string {
 }
 
 func (a *App) writeMihomoConfigMap(cfg map[string]any) error {
+	if err := a.ensureMihomoGeneratedBackup(); err != nil {
+		return err
+	}
 	if old, err := a.readTextFile("configs/mihomo/config.yaml"); err == nil {
 		a.createConfigHistory("mihomo", "configs/mihomo/config.yaml", old, "auto backup before Mihomo config update", "system")
 	}
@@ -1011,6 +1016,7 @@ func (a *App) writeMihomoConfigMap(cfg map[string]any) error {
 	if err != nil {
 		return err
 	}
+	a.setMihomoConfigMode("custom")
 	return a.writeTextFile("configs/mihomo/config.yaml", string(b))
 }
 

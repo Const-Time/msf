@@ -10,6 +10,7 @@ import {
   RefreshCw,
   RotateCcw,
   RotateCw,
+  Save,
   Search,
   Settings2,
   SlidersHorizontal,
@@ -77,6 +78,14 @@ interface Provider {
 interface ProviderSource {
   name: string;
   url: string;
+}
+
+interface ProxyGroupDraft {
+  id: string;
+  name: string;
+  type: string;
+  proxies: string;
+  extra: string;
 }
 
 interface RuntimeStats {
@@ -191,6 +200,45 @@ function readProxySettings(): ProxyPageSettings {
   } catch {
     return DEFAULT_PROXY_SETTINGS;
   }
+}
+
+function normalizeProxyGroupDrafts(payload: any): ProxyGroupDraft[] {
+  const data = apiData<any>(payload, payload || {});
+  const rows = apiList<any>(data, ["proxy-groups", "proxy_groups", "groups"]);
+  return rows.map((row, index) => {
+    const extra: Record<string, unknown> = {};
+    Object.entries(row || {}).forEach(([key, value]) => {
+      if (key === "name" || key === "type" || key === "proxies") return;
+      extra[key] = value;
+    });
+    const proxies = Array.isArray(row?.proxies) ? row.proxies.map(String).join(", ") : stringValue(row?.proxies);
+    return {
+      id: `${stringValue(row?.name) || "group"}-${index}`,
+      name: stringValue(row?.name),
+      type: stringValue(row?.type || "select"),
+      proxies,
+      extra: Object.keys(extra).length > 0 ? JSON.stringify(extra, null, 2) : "",
+    };
+  });
+}
+
+function serializeProxyGroupDrafts(rows: ProxyGroupDraft[]) {
+  return rows
+    .map((row) => {
+      const name = row.name.trim();
+      if (!name) return null;
+      const item: Record<string, unknown> = {
+        name,
+        type: row.type.trim() || "select",
+        proxies: row.proxies.split(",").map((part) => part.trim()).filter(Boolean),
+      };
+      if (row.extra.trim()) {
+        const extra = JSON.parse(row.extra) as Record<string, unknown>;
+        Object.assign(item, extra);
+      }
+      return item;
+    })
+    .filter(Boolean);
 }
 
 function readSavedTab(): "groups" | "providers" {
@@ -799,9 +847,11 @@ export default function MihomoProxiesPage() {
   const [testing, setTesting] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showProviderModal, setShowProviderModal] = useState(false);
+  const [showGroupModal, setShowGroupModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [collapseVersion, setCollapseVersion] = useState(0);
   const [sources, setSources] = useState<ProviderSource[]>([]);
+  const [groupDrafts, setGroupDrafts] = useState<ProxyGroupDraft[]>([]);
   const [loadedSourceNames, setLoadedSourceNames] = useState<Set<string>>(new Set());
   const [runtimeStats, setRuntimeStats] = useState<RuntimeStats>(EMPTY_STATS);
 
@@ -842,6 +892,15 @@ export default function MihomoProxiesPage() {
     }
   }, [showToast]);
 
+  const loadGroupDrafts = useCallback(async () => {
+    try {
+      const payload = await api<any>("/api/v1/mihomo/proxy-groups-config");
+      setGroupDrafts(normalizeProxyGroupDrafts(payload));
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "加载代理分组配置失败");
+    }
+  }, [showToast]);
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -855,6 +914,10 @@ export default function MihomoProxiesPage() {
   useEffect(() => {
     if (showProviderModal) void loadProviderSources();
   }, [showProviderModal, loadProviderSources]);
+
+  useEffect(() => {
+    if (showGroupModal) void loadGroupDrafts();
+  }, [showGroupModal, loadGroupDrafts]);
 
   useEffect(() => {
     window.localStorage.setItem(PROXIES_SETTINGS_KEY, JSON.stringify(settings));
@@ -1163,6 +1226,21 @@ export default function MihomoProxiesPage() {
     }
   };
 
+  const saveGroupDrafts = async () => {
+    try {
+      const payload = serializeProxyGroupDrafts(groupDrafts);
+      await api("/api/v1/mihomo/proxy-groups-config", {
+        method: "PUT",
+        body: JSON.stringify({ "proxy-groups": payload }),
+      });
+      setShowGroupModal(false);
+      showToast("代理分组已保存并重启 Mihomo");
+      await load();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "保存代理分组失败，请检查高级 JSON");
+    }
+  };
+
   return (
     <AppShell>
       <div className="space-y-4 animate-fade-in">
@@ -1382,7 +1460,17 @@ export default function MihomoProxiesPage() {
             </div>
           </div>
         ) : (
-          <div className={cn("grid grid-cols-1 gap-3", settings.doubleColumn && "2xl:grid-cols-2")}>
+          <div className="space-y-3">
+            <div className="flex">
+              <button
+                onClick={() => setShowGroupModal(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-input bg-background text-sm font-medium text-foreground hover:bg-muted transition-colors"
+              >
+                <Settings2 className="h-4 w-4" />
+                管理代理分组
+              </button>
+            </div>
+            <div className={cn("grid grid-cols-1 gap-3", settings.doubleColumn && "2xl:grid-cols-2")}>
             {visibleGroups.length === 0 ? (
               <div className="rounded-lg border border-dashed border-border bg-card p-8 text-center text-sm text-muted-foreground 2xl:col-span-2">
                 {loading ? "正在加载代理组..." : "暂无代理组"}
@@ -1492,6 +1580,7 @@ export default function MihomoProxiesPage() {
                 </div>
               );
             })}
+            </div>
           </div>
         )}
       </div>
@@ -1503,6 +1592,121 @@ export default function MihomoProxiesPage() {
         onReset={() => setSettings(DEFAULT_PROXY_SETTINGS)}
         onChange={setSettings}
       />
+
+      {showGroupModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowGroupModal(false)}
+        >
+          <div
+            className="w-full max-w-[920px] max-h-[86vh] overflow-auto rounded-xl border border-border bg-card shadow-apple-xl p-5 animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-foreground">代理分组</h2>
+                <p className="text-xs text-muted-foreground">保存后会切换为自定义配置并重启 Mihomo</p>
+              </div>
+              <button
+                onClick={() => setShowGroupModal(false)}
+                className="px-3 py-1.5 rounded-lg border border-input bg-background text-sm font-medium hover:bg-muted transition-colors flex items-center gap-1.5"
+              >
+                <X className="h-4 w-4" />
+                关闭
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {groupDrafts.length === 0 && (
+                <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">暂无代理分组</div>
+              )}
+              {groupDrafts.map((group, index) => (
+                <div key={group.id} className="rounded-lg border border-border/60 bg-background p-3">
+                  <div className="grid gap-2 md:grid-cols-[1fr_10rem_2fr_auto]">
+                    <input
+                      value={group.name}
+                      onChange={(event) => setGroupDrafts((items) => items.map((item, i) => (i === index ? { ...item, name: event.target.value } : item)))}
+                      placeholder="分组名称"
+                      className="px-3 py-2 text-sm rounded-lg border border-border/60 bg-card focus:outline-none focus:border-primary/60"
+                    />
+                    <select
+                      value={group.type}
+                      onChange={(event) => setGroupDrafts((items) => items.map((item, i) => (i === index ? { ...item, type: event.target.value } : item)))}
+                      className="px-3 py-2 text-sm rounded-lg border border-border/60 bg-card focus:outline-none focus:border-primary/60"
+                    >
+                      {["select", "url-test", "fallback", "load-balance", "relay"].map((type) => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                    <input
+                      value={group.proxies}
+                      onChange={(event) => setGroupDrafts((items) => items.map((item, i) => (i === index ? { ...item, proxies: event.target.value } : item)))}
+                      placeholder="节点/分组，逗号分隔"
+                      className="px-3 py-2 text-sm rounded-lg border border-border/60 bg-card font-mono focus:outline-none focus:border-primary/60"
+                    />
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setGroupDrafts((items) => {
+                          if (index === 0) return items;
+                          const next = [...items];
+                          [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                          return next;
+                        })}
+                        className="p-2 rounded-lg border border-border/60 text-muted-foreground hover:bg-muted"
+                        aria-label="上移"
+                      >
+                        <ChevronUp className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => setGroupDrafts((items) => {
+                          if (index >= items.length - 1) return items;
+                          const next = [...items];
+                          [next[index + 1], next[index]] = [next[index], next[index + 1]];
+                          return next;
+                        })}
+                        className="p-2 rounded-lg border border-border/60 text-muted-foreground hover:bg-muted"
+                        aria-label="下移"
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => setGroupDrafts((items) => items.filter((_, i) => i !== index))}
+                        className="p-2 rounded-lg border border-border/60 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                        aria-label="删除"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    value={group.extra}
+                    onChange={(event) => setGroupDrafts((items) => items.map((item, i) => (i === index ? { ...item, extra: event.target.value } : item)))}
+                    placeholder='高级 JSON，例如 {"url":"http://detectportal.firefox.com/success.txt","interval":120}'
+                    className="mt-2 min-h-20 w-full rounded-lg border border-border/60 bg-card px-3 py-2 font-mono text-xs focus:outline-none focus:border-primary/60"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <button
+                onClick={() => setGroupDrafts((items) => [...items, { id: `new-${Date.now()}`, name: "", type: "select", proxies: "DIRECT", extra: "" }])}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-input bg-background text-sm font-medium hover:bg-muted transition-colors"
+              >
+                <Plus className="h-4 w-4" />
+                新增分组
+              </button>
+              <button
+                onClick={() => void saveGroupDrafts()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+              >
+                <Save className="h-4 w-4" />
+                保存并重启
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showProviderModal && (
         <div

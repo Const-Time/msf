@@ -39,6 +39,7 @@ func (a *App) registerUpdateRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/component-updates/{component}/status", a.handleComponentUpdateStatus)
 	mux.HandleFunc("POST /api/v1/component-updates/{component}/check", a.handleComponentUpdateCheck)
 	mux.HandleFunc("POST /api/v1/component-updates/{component}/update", a.handleComponentUpdateRun)
+	mux.HandleFunc("POST /api/v1/component-updates/{component}/upload", a.handleComponentUpdateUpload)
 	mux.HandleFunc("GET /api/v1/component-updates/{component}/config", a.handleComponentUpdateConfig)
 	mux.HandleFunc("PUT /api/v1/component-updates/{component}/config", a.handleComponentUpdateConfigPut)
 }

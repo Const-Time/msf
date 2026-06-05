@@ -1,24 +1,24 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name "msm-free">
 <!ENTITY author "luochuhan">
-<!ENTITY version "0.2.1">
+<!ENTITY version "0.2.2">
 <!ENTITY githubRepo "scoltzero/msm-free">
-<!ENTITY releaseTag "v0.2.1">
-<!ENTITY packageName "msm-free-0.2.1-x86_64-1">
+<!ENTITY releaseTag "v0.2.2">
+<!ENTITY packageName "msm-free-0.2.2-x86_64-1">
 <!ENTITY packageFile "&packageName;.txz">
 <!ENTITY packageURL "https://github.com/&githubRepo;/releases/download/&releaseTag;/&packageFile;">
-<!ENTITY packageSHA256 "2357ea08f68b9a8866b5877dbe3552104db36597b8076970e914f30c8439beb7">
+<!ENTITY packageSHA256 "2bd8d536898525da3e6cf621908461f51cf5b87e83a3fbf25c731b4c928b8dab">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="https://raw.githubusercontent.com/&githubRepo;/main/msm-free.plg" launch="Settings/&name;" icon="network-wired" min="6.12.0">
   <CHANGES>
     <![CDATA[
-### msm-free 0.2.1
-- 复刻原版 MSM 6 步初始化向导，并接入现有初始化 API。
-- 修复订阅保存格式，避免 Mihomo provider 出现空 URL 或 `[]`。
-- 支持初始化阶段添加手动节点，生成 `proxy_providers/msm_manual.yaml` 本地供应商。
-- 补充 `ss`、`ssr`、`vmess`、`vless`、`trojan`、`hysteria`、`hysteria2`、`tuic` 分享链接基础解析。
-- 修复 GitHub 下载代理和加速配置，支持 HTTP、HTTPS、SOCKS5。
-- 修复 MosDNS 代理模式语义、Mihomo 节点页宽度适配、侧边栏滚动保持和更新配置保存回显。
+### msm-free 0.2.2
+- msm-free 主要功能已基本稳定，初始化、MosDNS/Mihomo 管理、代理规则、更新与发布链路进入可持续迭代状态。
+- 新增 Mihomo 自定义配置：用户配置可导入、新建、命名、保存、应用和回滚，代理分组、代理供应商、规则集和规则可在 WebUI 管理。
+- 新增 MosDNS、Mihomo、Zashboard 本地上传安装，网络困难时可用预下载核心离线安装。
+- 新增 CodeMirror YAML 配置编辑器，支持高亮、行号、撤销重做和搜索快捷键。
+- 修复 ARM64 版本下载组件核心时架构不匹配的问题，ARM64 系统会下载并校验 ARM64 MosDNS/Mihomo。
+- 修复初始化 6 步完成后的核心下载流程、Mihomo 节点整卡选择、节点宽度稳定和 MosDNS 客户端来源展示。
     ]]>
   </CHANGES>
 
@@ -58,8 +58,8 @@ set +e
 if [ -x /etc/rc.d/rc.msm-free ]; then
   /etc/rc.d/rc.msm-free stop
 fi
-removepkg msm-free-0.2.1-x86_64-1
-rm -f /boot/config/plugins/msm-free/msm-free-0.2.1-x86_64-1.txz
+removepkg msm-free-0.2.2-x86_64-1
+rm -f /boot/config/plugins/msm-free/msm-free-0.2.2-x86_64-1.txz
 echo "msm-free plugin removed. Persistent data remains under /mnt/user/appdata/msm-free unless you delete it manually."
       ]]>
     </INLINE>

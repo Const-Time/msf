@@ -89,6 +89,9 @@ func boolSetting(ok bool) string {
 }
 
 func (a *App) ensureSetupProviderArtifacts(cfg SetupConfig) error {
+	if a.mihomoConfigMode() == "custom" {
+		return nil
+	}
 	cfg.defaults()
 	providers := parseSubscriptionProviders(cfg.SubscriptionURLs)
 	includeManual := hasMihomoManualProxies(cfg.MihomoProxies)

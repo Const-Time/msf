@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode, type SelectHTMLAttributes } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type SelectHTMLAttributes } from "react";
 import {
   Check,
   Code2,
@@ -23,6 +23,7 @@ import {
   Sun,
   Trash2,
   TriangleAlert,
+  Upload,
   User,
   X,
   type LucideIcon,
@@ -1211,6 +1212,7 @@ function ComponentUpdateCard({
   item,
   config,
   busy,
+  onUpload,
   onCheck,
   onUpdate,
   onConfigChange,
@@ -1220,10 +1222,12 @@ function ComponentUpdateCard({
   item?: ComponentUpdateState;
   config?: ComponentUpdateConfigState;
   busy?: string;
+  onUpload: (component: string, file: File) => void;
   onCheck: (component: string) => void;
   onUpdate: (component: string) => void;
   onConfigChange: (component: string, patch: Partial<ComponentUpdateConfigState>) => void;
 }) {
+  const fileRef = useRef<HTMLInputElement>(null);
   const current = item?.current_version || "-";
   const latest = item?.latest_version || "-";
   const canUpdate = Boolean(item?.has_update);
@@ -1245,6 +1249,21 @@ function ComponentUpdateCard({
           {item?.error_message ? <div className="mt-1 text-xs text-destructive">{item.error_message}</div> : null}
         </div>
         <div className="flex shrink-0 items-center gap-2 sm:pt-0.5">
+          <input
+            ref={fileRef}
+            type="file"
+            className="hidden"
+            accept={component === "zashboard" ? ".zip" : undefined}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) onUpload(component, file);
+              event.currentTarget.value = "";
+            }}
+          />
+          <OutlineButton disabled={isBusy} onClick={() => fileRef.current?.click()} className="h-8 min-w-[76px] px-3 text-xs">
+            <Upload className="h-3.5 w-3.5" />
+            本地上传
+          </OutlineButton>
           <OutlineButton disabled={isBusy} onClick={() => onCheck(component)} className="h-8 min-w-[76px] px-3 text-xs">
             <RefreshCw className={cn("h-3.5 w-3.5", isBusy && "animate-spin")} />
             检查更新
@@ -1514,6 +1533,26 @@ function UpdateTab({ showToast }: { showToast: (message: string) => void }) {
     }
   };
 
+  const uploadComponent = async (component: string, file: File) => {
+    setComponentBusy(component);
+    try {
+      const body = new FormData();
+      body.append("file", file);
+      const payload = await api<any>(`/api/v1/component-updates/${component}/upload`, { method: "POST", body });
+      if (payload.success === false) {
+        showToast(`${component} 本地上传失败: ${payload.error || "未知错误"}`);
+        return;
+      }
+      const restarted = payload.data?.restarted ? "，已重启服务" : "";
+      showToast(`${component} 已通过本地文件安装${restarted}`);
+      await reloadComponents();
+    } catch (err) {
+      showToast(`${component} 本地上传失败: ${errorMessage(err)}`);
+    } finally {
+      setComponentBusy("");
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -1641,9 +1680,9 @@ function UpdateTab({ showToast }: { showToast: (message: string) => void }) {
       <Card title="组件更新" Icon={Download}>
         <p className="mb-4 text-sm text-muted-foreground">组件更新管理</p>
         <div className="grid gap-4 lg:grid-cols-2">
-          <ComponentUpdateCard name="MosDNS" component="mosdns" item={componentItem("mosdns")} config={componentConfigs.mosdns} busy={componentBusy} onCheck={checkComponent} onUpdate={updateComponent} onConfigChange={(item, patch) => void saveComponentConfig(item, patch)} />
-          <ComponentUpdateCard name="Mihomo" component="mihomo" item={componentItem("mihomo")} config={componentConfigs.mihomo} busy={componentBusy} onCheck={checkComponent} onUpdate={updateComponent} onConfigChange={(item, patch) => void saveComponentConfig(item, patch)} />
-          <ComponentUpdateCard name="Zashboard" component="zashboard" item={componentItem("zashboard")} config={componentConfigs.zashboard} busy={componentBusy} onCheck={checkComponent} onUpdate={updateComponent} onConfigChange={(item, patch) => void saveComponentConfig(item, patch)} />
+          <ComponentUpdateCard name="MosDNS" component="mosdns" item={componentItem("mosdns")} config={componentConfigs.mosdns} busy={componentBusy} onUpload={uploadComponent} onCheck={checkComponent} onUpdate={updateComponent} onConfigChange={(item, patch) => void saveComponentConfig(item, patch)} />
+          <ComponentUpdateCard name="Mihomo" component="mihomo" item={componentItem("mihomo")} config={componentConfigs.mihomo} busy={componentBusy} onUpload={uploadComponent} onCheck={checkComponent} onUpdate={updateComponent} onConfigChange={(item, patch) => void saveComponentConfig(item, patch)} />
+          <ComponentUpdateCard name="Zashboard" component="zashboard" item={componentItem("zashboard")} config={componentConfigs.zashboard} busy={componentBusy} onUpload={uploadComponent} onCheck={checkComponent} onUpdate={updateComponent} onConfigChange={(item, patch) => void saveComponentConfig(item, patch)} />
         </div>
       </Card>
 

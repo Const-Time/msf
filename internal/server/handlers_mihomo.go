@@ -40,6 +40,16 @@ func (a *App) registerMihomoRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/mihomo/config/files", a.handleMihomoConfigFiles)
 	mux.HandleFunc("GET /api/v1/mihomo/config/download", a.handleMihomoConfigDownload)
 	mux.HandleFunc("POST /api/v1/mihomo/config/upload", a.handleMihomoConfigUpload)
+	mux.HandleFunc("GET /api/v1/mihomo/config/mode", a.handleMihomoConfigMode)
+	mux.HandleFunc("GET /api/v1/mihomo/config/custom-template", a.handleMihomoCustomTemplate)
+	mux.HandleFunc("POST /api/v1/mihomo/config/import", a.handleMihomoConfigImport)
+	mux.HandleFunc("POST /api/v1/mihomo/config/restore-default", a.handleMihomoConfigRestoreDefault)
+	mux.HandleFunc("GET /api/v1/mihomo/user-configs", a.handleMihomoUserConfigs)
+	mux.HandleFunc("PUT /api/v1/mihomo/user-configs", a.handleMihomoUserConfigSave)
+	mux.HandleFunc("POST /api/v1/mihomo/user-configs/apply", a.handleMihomoUserConfigApply)
+	mux.HandleFunc("DELETE /api/v1/mihomo/user-configs/{name...}", a.handleMihomoUserConfigDelete)
+	mux.HandleFunc("GET /api/v1/mihomo/proxy-groups-config", a.handleMihomoProxyGroupsConfig)
+	mux.HandleFunc("PUT /api/v1/mihomo/proxy-groups-config", a.handleMihomoProxyGroupsConfigPut)
 	mux.HandleFunc("GET /api/v1/mihomo/rule-providers-config", a.handleMihomoProviderConfig)
 	mux.HandleFunc("PUT /api/v1/mihomo/rule-providers-config", a.handleMihomoProviderConfigPut)
 	mux.HandleFunc("GET /api/v1/mihomo/rules-config", a.handleMihomoRulesConfig)
@@ -193,6 +203,19 @@ func (a *App) handleMihomoConfigPut(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(req.Path, "configs/mihomo/") {
 		req.Path = filepath.ToSlash(filepath.Join("configs/mihomo", req.Path))
 	}
+	validation := mihomoConfigValidation{Valid: true}
+	if req.Path == mihomoActiveConfigRelPath {
+		validation = validateMihomoConfigContent(req.Content)
+		if !validation.Valid {
+			writeJSON(w, http.StatusOK, map[string]any{"success": false, "error": validation.Error, "data": validation})
+			return
+		}
+		if err := a.ensureMihomoGeneratedBackup(); err != nil {
+			writeError(w, http.StatusInternalServerError, "backup_failed", err.Error())
+			return
+		}
+		a.setMihomoConfigMode("custom")
+	}
 	if old, err := a.readTextFile(req.Path); err == nil {
 		a.createConfigHistory("mihomo", req.Path, old, "auto backup before Mihomo save", currentUsername(r))
 	}
@@ -203,7 +226,7 @@ func (a *App) handleMihomoConfigPut(w http.ResponseWriter, r *http.Request) {
 	if req.Restart {
 		_, _ = a.Services.Restart(r.Context(), "mihomo")
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "restart_required": !req.Restart, "data": map[string]any{"restart_required": !req.Restart}})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "restart_required": !req.Restart, "data": map[string]any{"restart_required": !req.Restart, "validation": validation, "mode": a.mihomoConfigModePayload()}})
 }
 
 func (a *App) handleMihomoConfigSwitch(w http.ResponseWriter, r *http.Request) {
@@ -250,6 +273,19 @@ func (a *App) handleMihomoConfigPathPut(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	validation := mihomoConfigValidation{Valid: true}
+	if rel == mihomoActiveConfigRelPath {
+		validation = validateMihomoConfigContent(req.Content)
+		if !validation.Valid {
+			writeJSON(w, http.StatusOK, map[string]any{"success": false, "error": validation.Error, "data": validation})
+			return
+		}
+		if err := a.ensureMihomoGeneratedBackup(); err != nil {
+			writeError(w, http.StatusInternalServerError, "backup_failed", err.Error())
+			return
+		}
+		a.setMihomoConfigMode("custom")
+	}
 	if old, err := a.readTextFile(rel); err == nil {
 		a.createConfigHistory("mihomo", rel, old, "auto backup before Mihomo save", currentUsername(r))
 	}
@@ -260,39 +296,16 @@ func (a *App) handleMihomoConfigPathPut(w http.ResponseWriter, r *http.Request) 
 	if req.Restart {
 		_, _ = a.Services.Restart(r.Context(), "mihomo")
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "path": rel, "restart_required": !req.Restart, "data": map[string]any{"path": rel, "restart_required": !req.Restart}})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "path": rel, "restart_required": !req.Restart, "data": map[string]any{"path": rel, "restart_required": !req.Restart, "validation": validation, "mode": a.mihomoConfigModePayload()}})
 }
 
 func (a *App) handleMihomoConfigs(w http.ResponseWriter, r *http.Request) {
-	root := filepath.Join(a.DataDir, "configs/mihomo")
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "path_error", err.Error())
-		return
+	items := a.mihomoUserConfigItems()
+	names := make([]string, 0, len(items))
+	for _, item := range items {
+		names = append(names, fmtAny(item["name"]))
 	}
-	var configs []string
-	var files []map[string]any
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext != ".yaml" && ext != ".yml" && ext != ".json" {
-			continue
-		}
-		configs = append(configs, name)
-		item := map[string]any{"name": name, "path": filepath.ToSlash(filepath.Join("configs/mihomo", name)), "type": "file"}
-		if info, err := entry.Info(); err == nil {
-			item["size"] = info.Size()
-			item["modified"] = info.ModTime().Format("2006-01-02 15:04:05")
-		}
-		files = append(files, item)
-	}
-	if len(configs) == 0 {
-		configs = append(configs, "config.yaml")
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": configs, "configs": configs, "files": files})
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": names, "configs": names, "files": items, "suggested_name": a.nextMihomoUserConfigName()})
 }
 
 func (a *App) handleMihomoConfigRollback(w http.ResponseWriter, r *http.Request) {
@@ -300,12 +313,8 @@ func (a *App) handleMihomoConfigRollback(w http.ResponseWriter, r *http.Request)
 }
 
 func (a *App) handleMihomoConfigFiles(w http.ResponseWriter, r *http.Request) {
-	nodes, err := a.fileTree("configs/mihomo", 4)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "path_error", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": nodes, "tree": nodes})
+	items := a.mihomoUserConfigItems()
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": items, "tree": items, "files": items, "suggested_name": a.nextMihomoUserConfigName()})
 }
 
 func (a *App) handleMihomoConfigDownload(w http.ResponseWriter, r *http.Request) {
@@ -330,7 +339,8 @@ func (a *App) handleMihomoProviderConfigPut(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "write_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	_, _ = a.Services.Restart(r.Context(), "mihomo")
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "restart_required": false, "data": a.mihomoRuleProvidersPayload()})
 }
 
 func (a *App) handleMihomoRulesConfig(w http.ResponseWriter, r *http.Request) {
@@ -349,7 +359,8 @@ func (a *App) handleMihomoRulesConfigPut(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "write_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	_, _ = a.Services.Restart(r.Context(), "mihomo")
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "restart_required": false, "data": map[string]any{"rules": a.mihomoConfigMap()["rules"], "rule-providers": a.mihomoConfigMap()["rule-providers"], "runtime": a.mihomoRulesRuntime(r), "mode": a.mihomoConfigModePayload()}})
 }
 
 func (a *App) handleMihomoTraffic(w http.ResponseWriter, r *http.Request) {
@@ -420,7 +431,8 @@ func (a *App) handleMihomoProxyProvidersPut(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "write_failed", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true})
+	_, _ = a.Services.Restart(r.Context(), "mihomo")
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "restart_required": false, "data": a.mihomoProxyProvidersPayload()})
 }
 
 func (a *App) handleMihomoControllerProxy(w http.ResponseWriter, r *http.Request) {
@@ -520,12 +532,12 @@ func (a *App) handleMihomoValidate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	var v any
-	if err := yaml.Unmarshal([]byte(req.Content), &v); err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "valid": false, "error": err.Error()})
-		return
+	validation := validateMihomoConfigContent(req.Content)
+	resp := map[string]any{"success": true, "valid": validation.Valid, "warnings": validation.Warnings, "data": validation}
+	if !validation.Valid {
+		resp["error"] = validation.Error
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "valid": true})
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (a *App) updateMihomoConfigSections(req map[string]any, sections ...string) error {

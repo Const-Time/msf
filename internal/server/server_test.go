@@ -1,9 +1,11 @@
 package server
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -509,6 +511,46 @@ func TestUpdateConfigPersistsGlobalAndComponentSettings(t *testing.T) {
 		if !strings.Contains(componentGet.Body.String(), want) {
 			t.Fatalf("component update config get missing %q: status=%d body=%s", want, componentGet.Code, componentGet.Body.String())
 		}
+	}
+}
+
+func TestComponentUpdateUploadInstallsZashboardZip(t *testing.T) {
+	app := newTestApp(t)
+	token := tokenForRole(t, app, "admin")
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	index, err := zw.Create("dist/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := index.Write([]byte(`<!doctype html><html><body>Zashboard</body></html>`)); err != nil {
+		t.Fatal(err)
+	}
+	asset, err := zw.Create("dist/assets/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := asset.Write([]byte(`console.log("ok")`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	uploaded := requestMultipartFile(t, app, http.MethodPost, "/api/v1/component-updates/zashboard/upload", token, "file", "zashboard.zip", buf.Bytes(), nil)
+	if uploaded.Code != http.StatusOK || !strings.Contains(uploaded.Body.String(), `"success":true`) || !strings.Contains(uploaded.Body.String(), "local-upload-") {
+		t.Fatalf("zashboard upload status=%d body=%s", uploaded.Code, uploaded.Body.String())
+	}
+	body, err := os.ReadFile(filepath.Join(app.DataDir, "configs/mihomo/ui/index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "Zashboard") {
+		t.Fatalf("zashboard index not installed:\n%s", string(body))
+	}
+	state := requestJSON(t, app, http.MethodGet, "/api/v1/component-updates/zashboard", token, nil)
+	if state.Code != http.StatusOK || !strings.Contains(state.Body.String(), `"status":"completed"`) || !strings.Contains(state.Body.String(), `"has_update":false`) {
+		t.Fatalf("zashboard update state mismatch: status=%d body=%s", state.Code, state.Body.String())
 	}
 }
 
@@ -1229,7 +1271,7 @@ func TestMihomoProviderConfigManagementCreatesHistory(t *testing.T) {
 		"url":      "https://example.com/sub.yaml",
 		"interval": 3600,
 	})
-	if put.Code != http.StatusOK || !strings.Contains(put.Body.String(), `"restart_required":true`) {
+	if put.Code != http.StatusOK || !strings.Contains(put.Body.String(), `"restart_required":false`) || !strings.Contains(put.Body.String(), `"mode":"custom"`) {
 		t.Fatalf("proxy provider put status=%d body=%s", put.Code, put.Body.String())
 	}
 	cfg, err := os.ReadFile(filepath.Join(app.DataDir, "configs/mihomo/config.yaml"))
@@ -1247,7 +1289,7 @@ func TestMihomoProviderConfigManagementCreatesHistory(t *testing.T) {
 		"url":      "https://example.com/rules.yaml",
 		"behavior": "domain",
 	})
-	if rulePut.Code != http.StatusOK || !strings.Contains(rulePut.Body.String(), `"restart_required":true`) {
+	if rulePut.Code != http.StatusOK || !strings.Contains(rulePut.Body.String(), `"restart_required":false`) || !strings.Contains(rulePut.Body.String(), `"mode":"custom"`) {
 		t.Fatalf("rule provider put status=%d body=%s", rulePut.Code, rulePut.Body.String())
 	}
 	list := requestJSON(t, app, http.MethodGet, "/api/v1/mihomo/providers", token, nil)
@@ -1262,8 +1304,90 @@ func TestMihomoProviderConfigManagementCreatesHistory(t *testing.T) {
 		t.Fatal("expected Mihomo provider config updates to create history")
 	}
 	del := requestJSON(t, app, http.MethodDelete, "/api/v1/mihomo/proxy-providers/airport", token, nil)
-	if del.Code != http.StatusOK || !strings.Contains(del.Body.String(), `"restart_required":true`) {
+	if del.Code != http.StatusOK || !strings.Contains(del.Body.String(), `"restart_required":false`) {
 		t.Fatalf("proxy provider delete status=%d body=%s", del.Code, del.Body.String())
+	}
+}
+
+func TestMihomoCustomConfigModeProtectsGeneratedConfigAndRestoresBackup(t *testing.T) {
+	app := newTestApp(t)
+	token := tokenForRole(t, app, "admin")
+	original, err := app.readTextFile(mihomoActiveConfigRelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	custom := testMihomoConfigYAML("Custom")
+
+	imported := requestMultipartFile(t, app, http.MethodPost, "/api/v1/mihomo/config/import", token, "file", "custom.yaml", []byte(custom), map[string]string{"restart": "false"})
+	if imported.Code != http.StatusOK || !strings.Contains(imported.Body.String(), `"success":true`) || !strings.Contains(imported.Body.String(), `"path":"configs/mihomo/user_configs/custom.yaml"`) {
+		t.Fatalf("custom config import status=%d body=%s", imported.Code, imported.Body.String())
+	}
+	if active, err := app.readTextFile(mihomoActiveConfigRelPath); err != nil || active != original {
+		t.Fatalf("import should not overwrite active config before apply, err=%v\n%s", err, active)
+	}
+	conflict := requestJSON(t, app, http.MethodPut, "/api/v1/mihomo/user-configs", token, map[string]any{"name": "custom.yaml", "content": custom})
+	if conflict.Code != http.StatusConflict {
+		t.Fatalf("saving same user config without overwrite should conflict: status=%d body=%s", conflict.Code, conflict.Body.String())
+	}
+	overwrite := requestJSON(t, app, http.MethodPut, "/api/v1/mihomo/user-configs", token, map[string]any{"name": "custom.yaml", "content": testMihomoConfigYAML("Custom"), "overwrite": true})
+	if overwrite.Code != http.StatusOK || !strings.Contains(overwrite.Body.String(), `"success":true`) {
+		t.Fatalf("saving same user config with overwrite should pass: status=%d body=%s", overwrite.Code, overwrite.Body.String())
+	}
+	applied := requestJSON(t, app, http.MethodPost, "/api/v1/mihomo/user-configs/apply", token, map[string]any{"path": "configs/mihomo/user_configs/custom.yaml", "restart": false})
+	if applied.Code != http.StatusOK || !strings.Contains(applied.Body.String(), `"mode":"custom"`) || !strings.Contains(applied.Body.String(), `"restarted":false`) {
+		t.Fatalf("apply user config status=%d body=%s", applied.Code, applied.Body.String())
+	}
+	backupPath, err := app.safePath(mihomoGeneratedBackupRelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(backupPath); err != nil {
+		t.Fatalf("generated config backup should exist: %v", err)
+	}
+
+	cfg := SetupConfig{
+		SelectedInterface: "eth0",
+		SubscriptionURLs:  "airport|https://example.com/sub.yaml",
+		ProxyCore:         "mihomo",
+		MosDNSEnabled:     true,
+	}
+	if err := app.writeGeneratedConfigs(cfg); err != nil {
+		t.Fatal(err)
+	}
+	active, err := app.readTextFile(mihomoActiveConfigRelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(active, "Custom") || strings.Contains(active, "https://example.com/sub.yaml") {
+		t.Fatalf("custom config should not be overwritten by generated writes:\n%s", active)
+	}
+
+	groups := requestJSON(t, app, http.MethodPut, "/api/v1/mihomo/proxy-groups-config", token, map[string]any{
+		"proxy-groups": []any{
+			map[string]any{"name": "Edited", "type": "select", "proxies": []any{"DIRECT"}, "url": "http://www.gstatic.com/generate_204", "interval": 300},
+		},
+	})
+	if groups.Code != http.StatusOK || !strings.Contains(groups.Body.String(), `"restart_required":false`) {
+		t.Fatalf("proxy groups save status=%d body=%s", groups.Code, groups.Body.String())
+	}
+	active, err = app.readTextFile(mihomoActiveConfigRelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(active, "Edited") || strings.Contains(active, "Custom") {
+		t.Fatalf("proxy group section should be replaced without leaving old group names:\n%s", active)
+	}
+
+	restored := requestJSON(t, app, http.MethodPost, "/api/v1/mihomo/config/restore-default?restart=false", token, nil)
+	if restored.Code != http.StatusOK || !strings.Contains(restored.Body.String(), `"mode":"generated"`) {
+		t.Fatalf("restore default status=%d body=%s", restored.Code, restored.Body.String())
+	}
+	restoredText, err := app.readTextFile(mihomoActiveConfigRelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restoredText != original {
+		t.Fatalf("restore should use generated backup\nwant:\n%s\ngot:\n%s", original, restoredText)
 	}
 }
 
@@ -1294,8 +1418,16 @@ func TestMihomoConfigAndLogPanelCompatibility(t *testing.T) {
 		t.Fatal("expected Mihomo config path save to create history")
 	}
 	files := requestJSON(t, app, http.MethodGet, "/api/v1/mihomo/config/files", token, nil)
-	if files.Code != http.StatusOK || !strings.Contains(files.Body.String(), "config.yaml") {
+	if files.Code != http.StatusOK || strings.Contains(files.Body.String(), "config.yaml") {
 		t.Fatalf("mihomo config files mismatch: status=%d body=%s", files.Code, files.Body.String())
+	}
+	userConfig := requestJSON(t, app, http.MethodPut, "/api/v1/mihomo/user-configs", token, map[string]any{"name": "panel.yaml", "content": testMihomoConfigYAML("Panel"), "overwrite": true})
+	if userConfig.Code != http.StatusOK {
+		t.Fatalf("user config save status=%d body=%s", userConfig.Code, userConfig.Body.String())
+	}
+	files = requestJSON(t, app, http.MethodGet, "/api/v1/mihomo/config/files", token, nil)
+	if files.Code != http.StatusOK || !strings.Contains(files.Body.String(), "panel.yaml") || strings.Contains(files.Body.String(), "phone_config.yaml") {
+		t.Fatalf("mihomo user config files mismatch: status=%d body=%s", files.Code, files.Body.String())
 	}
 }
 
@@ -1818,6 +1950,59 @@ func strconvID(v any) string {
 	default:
 		return ""
 	}
+}
+
+func testMihomoConfigYAML(group string) string {
+	return `mode: rule
+port: 7890
+socks-port: 7891
+redir-port: 7877
+tproxy-port: 7896
+external-controller: :9090
+external-ui: ui
+allow-lan: true
+profile:
+  store-selected: true
+dns:
+  enable: true
+  listen: 0.0.0.0:6666
+proxy-groups:
+  - name: ` + group + `
+    type: select
+    proxies:
+      - DIRECT
+rules:
+  - MATCH,DIRECT
+`
+}
+
+func requestMultipartFile(t *testing.T, app *App, method, path, token, fieldName, filename string, content []byte, fields map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	part, err := writer.CreateFormFile(fieldName, filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(method, path, &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	res := httptest.NewRecorder()
+	app.Router().ServeHTTP(res, req)
+	return res
 }
 
 func requestJSON(t *testing.T, app *App, method, path, token string, body any) *httptest.ResponseRecorder {

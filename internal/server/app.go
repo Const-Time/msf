@@ -104,6 +104,7 @@ func (a *App) EnsureBaseLayout() error {
 		"configs/mosdns/unpack",
 		"configs/mihomo/rules",
 		"configs/mihomo/proxy_providers",
+		"configs/mihomo/user_configs",
 		"configs/mihomo/ui",
 		"configs/network",
 		"configs/network/history",

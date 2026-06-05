@@ -35,6 +35,7 @@ func (a *App) ensureCompatibilityLayout() error {
 		"configs/network/history/.keep":          "",
 		"data/binaries/supervisord/.keep":        "",
 		"configs/mihomo/proxy_providers/.keep":   "",
+		"configs/mihomo/user_configs/.keep":      "",
 		"configs/mihomo/ui/.keep":                "",
 		"configs/mosdns/adguard/.keep":           "",
 		"configs/mosdns/gen/.keep":               "",
