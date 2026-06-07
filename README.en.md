@@ -54,7 +54,7 @@ In Unraid WebGUI, open **Plugins / Install Plugin**, paste this URL, and install
 https://raw.githubusercontent.com/scoltzero/msm-free/main/msm-free.plg
 ```
 
-After installation, open **Settings / MSM Free**, then open the WebUI and complete the setup wizard.
+After installation, open **Settings / MSF Free**, then open the WebUI and complete the setup wizard.
 
 On a fresh install, before setup exists, the plugin starts only the `msm-free` management WebUI. After setup is completed, `msm-free` restores enabled Mihomo, MosDNS and nftables state on subsequent starts.
 

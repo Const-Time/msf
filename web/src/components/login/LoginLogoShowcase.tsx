@@ -194,7 +194,7 @@ export function LoginLogoShowcase({ compact = false, className }: LoginLogoShowc
         compact ? "h-[6.75rem] w-[6.75rem]" : "h-[10.25rem] w-[10.25rem]",
         className,
       )}
-      aria-label="MSM logo"
+      aria-label="MSF logo"
     >
       <div className="relative flex items-center justify-center">
         <div
@@ -300,7 +300,7 @@ export function LoginLogoShowcase({ compact = false, className }: LoginLogoShowc
           <div ref={tileRef} aria-hidden="true" className="login-logo-tile absolute inset-0 rounded-3xl bg-gradient-to-br from-primary/20 via-transparent to-blue-400/20" />
           <img
             src="/logo/logo-square.png"
-            alt="MSM"
+            alt="MSF"
             className={cn("relative z-10 object-contain drop-shadow-2xl", compact ? "h-[4.4rem] w-[4.4rem]" : "h-[6.6rem] w-[6.6rem]")}
           />
         </div>

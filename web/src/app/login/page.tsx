@@ -50,7 +50,7 @@ export default function LoginPage() {
           </div>
           <div className="space-y-4 animate-fade-in">
             <h1 className="text-4xl xl:text-5xl font-bold text-slate-800 dark:text-slate-100">
-              MSM 管理平台
+              MSF 管理平台
             </h1>
             <p className="text-sm text-slate-500 dark:text-slate-500 max-w-md mx-auto">
               统一管理您的网络服务，提供 DNS 分流、代理管理等功能
@@ -84,7 +84,7 @@ export default function LoginPage() {
             <div className="mb-6 flex justify-center lg:hidden">
               <LoginLogoShowcase compact />
             </div>
-            <p className="text-base font-medium text-slate-600 dark:text-slate-400">欢迎使用 MSM</p>
+            <p className="text-base font-medium text-slate-600 dark:text-slate-400">欢迎使用 MSF</p>
           </div>
           <div className="px-8 pb-8">
             <form className="space-y-5" onSubmit={submit}>

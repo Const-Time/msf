@@ -146,7 +146,7 @@ sudo ./uninstall.sh --purge
 https://github.com/scoltzero/msm-free/releases/download/v0.2.2/msm-free.plg
 ```
 
-安装完成后打开 **Settings / MSM Free**，进入插件设置页，再点击打开 WebUI。
+安装完成后打开 **Settings / MSF Free**，进入插件设置页，再点击打开 WebUI。
 
 Unraid 默认数据目录：
 

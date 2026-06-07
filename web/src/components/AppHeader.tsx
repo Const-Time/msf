@@ -107,10 +107,10 @@ export function AppHeader({ onToggleSidebar, sidebarCollapsed = false }: { onTog
 
         <div className="flex items-center gap-2 md:gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-primary/10 to-secondary/10 md:h-10 md:w-10">
-            <Image alt="MSM" src="/logo/logo-square.png" width={32} height={32} className="h-7 w-7 object-contain md:h-8 md:w-8" />
+            <Image alt="MSF" src="/logo/logo-square.png" width={32} height={32} className="h-7 w-7 object-contain md:h-8 md:w-8" />
           </div>
           <span className="bg-gradient-to-r from-primary to-secondary bg-clip-text text-lg font-bold text-transparent md:text-xl">
-            MSM
+            MSF
           </span>
         </div>
 
