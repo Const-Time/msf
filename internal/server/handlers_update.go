@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -355,17 +356,43 @@ func (a *App) handleComponentUpdateStatus(w http.ResponseWriter, r *http.Request
 func (a *App) handleComponentUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	component := normalizeComponent(r.PathValue("component"))
 	state := a.componentUpdateState(component)
-	if remote, err := a.componentRemoteInfo(component); err == nil {
-		state["latest_version"] = remote.TagName
-		state["download_url"] = firstNonEmpty(a.componentReleaseAssetURL(remote, component), a.componentDownloadURL(component))
-		state["release_body"] = remote.Body
-		state["has_update"] = versionDifferent(fmt.Sprint(state["current_version"]), remote.TagName)
+	remote, err := a.componentRemoteInfo(component)
+	if err != nil {
+		state["status"] = "failed"
+		state["error_message"] = err.Error()
+		state["last_check_time"] = time.Now()
+		_, _ = a.DB.Exec(`insert into component_update_info(component,current_version,latest_version,has_update,download_url,release_body,status,progress,error_message,last_check_time,created_at,updated_at)
+			values(?,?,?,?,?,?,?,?,?,?,?,?)
+			on conflict(component) do update set current_version=excluded.current_version,status='failed',progress=0,error_message=excluded.error_message,last_check_time=excluded.last_check_time,updated_at=excluded.updated_at`,
+			component, state["current_version"], state["latest_version"], state["has_update"], state["download_url"], "", "failed", 0, err.Error(), state["last_check_time"], time.Now(), time.Now())
+		writeJSON(w, http.StatusOK, map[string]any{"success": false, "error": err.Error(), "data": state})
+		return
 	}
-	state["last_check_time"] = time.Now()
-	_, _ = a.DB.Exec(`insert into component_update_info(component,current_version,latest_version,has_update,download_url,status,progress,last_check_time,created_at,updated_at)
-		values(?,?,?,?,?,?,?,?,?,?)
-		on conflict(component) do update set current_version=excluded.current_version,latest_version=excluded.latest_version,has_update=excluded.has_update,download_url=excluded.download_url,status='checked',progress=0,last_check_time=excluded.last_check_time,updated_at=excluded.updated_at`,
-		component, state["current_version"], state["latest_version"], state["has_update"], state["download_url"], "checked", 0, time.Now(), time.Now(), time.Now())
+	latestVersion := a.componentRemoteVersion(component, remote)
+	downloadURL := firstNonEmpty(a.componentReleaseAssetURL(remote, component), a.componentDownloadURL(component))
+	now := time.Now()
+	currentVersion := firstNonEmpty(componentStateString(state, "current_version_detail"), componentStateString(state, "current_version"))
+	hasUpdate := componentHasUpdate(currentVersion, latestVersion)
+	displayVersion, detailVersion := componentDisplayCurrentVersion(component, currentVersion, latestVersion)
+	state["current_version"] = displayVersion
+	if detailVersion != "" {
+		state["current_version_detail"] = detailVersion
+	} else {
+		delete(state, "current_version_detail")
+	}
+	state["latest_version"] = latestVersion
+	state["download_url"] = downloadURL
+	state["release_body"] = remote.Body
+	state["has_update"] = hasUpdate
+	state["can_update"] = componentCanUpdate(currentVersion, latestVersion, hasUpdate, downloadURL)
+	state["status"] = "checked"
+	state["progress"] = 0
+	state["error_message"] = ""
+	state["last_check_time"] = now
+	_, _ = a.DB.Exec(`insert into component_update_info(component,current_version,latest_version,has_update,download_url,release_body,status,progress,error_message,last_check_time,created_at,updated_at)
+		values(?,?,?,?,?,?,?,?,?,?,?,?)
+		on conflict(component) do update set current_version=excluded.current_version,latest_version=excluded.latest_version,has_update=excluded.has_update,download_url=excluded.download_url,release_body=excluded.release_body,status='checked',progress=0,error_message='',last_check_time=excluded.last_check_time,updated_at=excluded.updated_at`,
+		component, currentVersion, latestVersion, hasUpdate, downloadURL, remote.Body, "checked", 0, "", now, now, now)
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": state})
 }
 
@@ -376,10 +403,26 @@ func (a *App) handleComponentUpdateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
-	_, _ = a.DB.Exec(`insert into component_update_info(component,current_version,latest_version,has_update,download_url,status,progress,created_at,updated_at)
-		values(?,?,?,?,?,?,?,?,?)
-		on conflict(component) do update set status='running',progress=5,error_message='',updated_at=excluded.updated_at`,
-		component, a.componentCurrentVersion(component), "latest", true, a.componentDownloadURL(component), "running", 5, now, now)
+	state := a.componentUpdateState(component)
+	latestVersion := componentStateString(state, "latest_version")
+	downloadURL := componentStateString(state, "download_url")
+	releaseBody := ""
+	if remote, err := a.componentRemoteInfo(component); err == nil {
+		latestVersion = a.componentRemoteVersion(component, remote)
+		downloadURL = firstNonEmpty(a.componentReleaseAssetURL(remote, component), a.componentDownloadURL(component))
+		releaseBody = remote.Body
+	}
+	if isPlaceholderComponentVersion(latestVersion) {
+		latestVersion = "-"
+	}
+	if downloadURL == "" {
+		downloadURL = a.componentDownloadURL(component)
+	}
+	wasRunning := component != "zashboard" && component != "ui" && a.Services.Status(component).Running
+	_, _ = a.DB.Exec(`insert into component_update_info(component,current_version,latest_version,has_update,download_url,release_body,status,progress,error_message,created_at,updated_at)
+		values(?,?,?,?,?,?,?,?,?,?,?)
+		on conflict(component) do update set current_version=excluded.current_version,latest_version=excluded.latest_version,download_url=excluded.download_url,release_body=excluded.release_body,status='running',progress=5,error_message='',updated_at=excluded.updated_at`,
+		component, a.componentCurrentVersion(component), latestVersion, true, downloadURL, releaseBody, "running", 5, "", now, now)
 	last := DownloadEvent{Status: "running", Progress: 5, Message: "starting"}
 	err := a.installComponent(component, func(ev DownloadEvent) {
 		last = ev
@@ -390,8 +433,23 @@ func (a *App) handleComponentUpdateRun(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"success": false, "error": err.Error(), "data": a.componentUpdateState(component)})
 		return
 	}
-	_, _ = a.DB.Exec(`update component_update_info set current_version='installed', latest_version='latest', has_update=false, status='completed', progress=100, error_message='', updated_at=? where component=?`, nowString(), component)
-	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": a.componentUpdateState(component)})
+	restarted := false
+	if wasRunning {
+		if _, err := a.Services.Restart(r.Context(), component); err != nil {
+			_, _ = a.DB.Exec(`update component_update_info set status='failed', progress=100, error_message=?, updated_at=? where component=?`, "installed but restart failed: "+err.Error(), nowString(), component)
+			writeJSON(w, http.StatusOK, map[string]any{"success": false, "error": "installed but restart failed: " + err.Error(), "data": a.componentUpdateState(component)})
+			return
+		}
+		restarted = true
+	}
+	currentVersion := a.componentCurrentVersion(component)
+	if component == "zashboard" && !isPlaceholderComponentVersion(latestVersion) {
+		currentVersion = latestVersion
+	}
+	_, _ = a.DB.Exec(`update component_update_info set current_version=?, latest_version=?, has_update=false, status='completed', progress=100, error_message='', last_check_time=?, updated_at=? where component=?`, currentVersion, latestVersion, now, nowString(), component)
+	next := a.componentUpdateState(component)
+	next["restarted"] = restarted
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": next})
 }
 
 func (a *App) handleComponentUpdateConfig(w http.ResponseWriter, r *http.Request) {
@@ -431,12 +489,17 @@ func (a *App) componentUpdateState(component string) map[string]any {
 	state := map[string]any{
 		"component":       component,
 		"current_version": current,
-		"latest_version":  "latest",
+		"latest_version":  "-",
 		"has_update":      !installed,
+		"can_update":      a.componentDownloadURL(component) != "",
 		"download_url":    a.componentDownloadURL(component),
 		"status":          "idle",
 		"progress":        0,
 		"error_message":   "",
+	}
+	if display, detail := componentDisplayCurrentVersion(component, current, "-"); display != current {
+		state["current_version"] = display
+		state["current_version_detail"] = detail
 	}
 	row := a.DB.QueryRow(`select current_version,latest_version,has_update,coalesce(download_url,''),status,progress,coalesce(error_message,''),last_check_time from component_update_info where component=?`, component)
 	var last sql.NullTime
@@ -444,9 +507,29 @@ func (a *App) componentUpdateState(component string) map[string]any {
 	var hasUpdate bool
 	var progress int
 	if err := row.Scan(&currentVersion, &latestVersion, &hasUpdate, &downloadURL, &status, &progress, &errText, &last); err == nil {
-		state["current_version"] = currentVersion
+		if shouldUseLiveComponentVersion(component, current, currentVersion) {
+			currentVersion = current
+		}
+		if isPlaceholderComponentVersion(latestVersion) {
+			latestVersion = "-"
+		}
+		if currentVersion == "not-installed" {
+			hasUpdate = true
+		} else if isPlaceholderComponentVersion(latestVersion) {
+			hasUpdate = false
+		} else if !isPlaceholderComponentVersion(latestVersion) {
+			hasUpdate = componentHasUpdate(currentVersion, latestVersion)
+		}
+		displayVersion, detailVersion := componentDisplayCurrentVersion(component, currentVersion, latestVersion)
+		state["current_version"] = displayVersion
+		if detailVersion != "" {
+			state["current_version_detail"] = detailVersion
+		} else {
+			delete(state, "current_version_detail")
+		}
 		state["latest_version"] = latestVersion
 		state["has_update"] = hasUpdate
+		state["can_update"] = componentCanUpdate(currentVersion, latestVersion, hasUpdate, firstNonEmpty(downloadURL, a.componentDownloadURL(component)))
 		state["download_url"] = downloadURL
 		state["status"] = status
 		state["progress"] = progress
@@ -465,14 +548,241 @@ func (a *App) componentRemoteInfo(component string) (githubRelease, error) {
 	case "mihomo":
 		return a.fetchReleaseByTag("baozaodetudou", "mssb", "mihomo")
 	case "zashboard":
-		commit, err := a.fetchGitHubCommit("Zephyruso", "zashboard", "gh-pages")
-		if err != nil {
-			return githubRelease{}, err
-		}
-		return githubRelease{TagName: "gh-pages-" + shortSHA(commit.SHA), Name: "zashboard gh-pages", Body: commit.Commit.Message, Assets: []githubAsset{{Name: "gh-pages.zip", BrowserDownloadURL: a.componentDownloadURL("zashboard")}}}, nil
+		return a.fetchLatestRelease("Zephyruso", "zashboard")
 	default:
 		return githubRelease{}, fmt.Errorf("unknown component %s", component)
 	}
+}
+
+var componentVersionTokenRE = regexp.MustCompile(`(?i)(ph-yyds-[0-9a-z._-]+|v?\d+(?:\.\d+){1,3}(?:[-+][0-9a-z._-]+)?)`)
+var componentCommitTokenRE = regexp.MustCompile(`(?i)\b[0-9a-f]{7,40}\b`)
+
+func (a *App) componentRemoteVersion(component string, release githubRelease) string {
+	component = normalizeComponent(component)
+	mihomoCoreType, _ := a.componentDownloadOptions()
+	switch component {
+	case "mosdns":
+		if v := releaseBodyFieldVersion(release.Body, "版本号"); v != "" {
+			return v
+		}
+		if v := releaseBodyFieldVersion(release.Body, "version"); v != "" {
+			return v
+		}
+	case "mihomo":
+		if v := mihomoReleaseBodyVersion(release.Body, mihomoCoreType); v != "" {
+			return v
+		}
+	case "zashboard":
+		if v := strings.TrimSpace(release.TagName); v != "" {
+			return v
+		}
+	}
+	if v := firstVersionToken(release.Body); v != "" {
+		return v
+	}
+	return firstNonEmpty(strings.TrimSpace(release.TagName), strings.TrimSpace(release.Name), "-")
+}
+
+func releaseBodyFieldVersion(body, field string) string {
+	field = strings.ToLower(strings.TrimSpace(field))
+	for _, line := range strings.Split(body, "\n") {
+		lower := strings.ToLower(strings.TrimSpace(line))
+		if !strings.Contains(lower, field) {
+			continue
+		}
+		for _, sep := range []string{":", "："} {
+			if idx := strings.Index(line, sep); idx >= 0 {
+				if v := cleanReleaseVersionCandidate(line[idx+len(sep):]); v != "" {
+					return v
+				}
+			}
+		}
+		if v := firstVersionToken(line); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func mihomoReleaseBodyVersion(body, coreType string) string {
+	coreType = normalizeMihomoCoreType(coreType)
+	var fallback string
+	for _, line := range strings.Split(body, "\n") {
+		lower := strings.ToLower(line)
+		if !strings.Contains(lower, "mihomo") {
+			continue
+		}
+		version := firstVersionToken(line)
+		if version == "" {
+			continue
+		}
+		if strings.Contains(lower, coreType) {
+			return version
+		}
+		if fallback == "" {
+			fallback = version
+		}
+	}
+	return fallback
+}
+
+func cleanReleaseVersionCandidate(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, " \t\r\n,，。;；:：`'\"[]()（）")
+	if value == "" {
+		return ""
+	}
+	return firstVersionToken(value)
+}
+
+func firstVersionToken(value string) string {
+	match := componentVersionTokenRE.FindString(strings.TrimSpace(value))
+	if match == "" {
+		return ""
+	}
+	return strings.Trim(match, " \t\r\n,，。;；:：`'\"[]()（）")
+}
+
+func compactVersionOutput(value string) string {
+	lines := strings.FieldsFunc(value, func(r rune) bool {
+		return r == '\n' || r == '\r'
+	})
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+func componentHasUpdate(current, latest string) bool {
+	current = strings.TrimSpace(current)
+	latest = strings.TrimSpace(latest)
+	if current == "" || isInvalidComponentVersion(current) || isPlaceholderComponentVersion(latest) {
+		return false
+	}
+	if current == "not-installed" {
+		return true
+	}
+	if current == "unknown" || current == "installed" || isSyntheticInstalledVersion(current) {
+		return false
+	}
+	return !componentVersionsEquivalent(current, latest)
+}
+
+func componentCanUpdate(current, latest string, hasUpdate bool, downloadURL string) bool {
+	if strings.TrimSpace(downloadURL) == "" {
+		return false
+	}
+	if hasUpdate {
+		return true
+	}
+	current = strings.TrimSpace(strings.ToLower(current))
+	if current == "not-installed" {
+		return true
+	}
+	return componentVersionUncertain(current, latest)
+}
+
+func componentVersionUncertain(current, latest string) bool {
+	current = strings.TrimSpace(strings.ToLower(current))
+	if current == "" || isInvalidComponentVersion(current) || current == "unknown" || current == "installed" || isSyntheticInstalledVersion(current) {
+		return true
+	}
+	return isPlaceholderComponentVersion(latest)
+}
+
+func componentStateString(state map[string]any, key string) string {
+	value, ok := state[key]
+	if !ok || value == nil {
+		return ""
+	}
+	if s, ok := value.(string); ok {
+		if isInvalidComponentVersion(s) {
+			return ""
+		}
+		return strings.TrimSpace(s)
+	}
+	out := strings.TrimSpace(fmt.Sprint(value))
+	if isInvalidComponentVersion(out) {
+		return ""
+	}
+	return out
+}
+
+func componentDisplayCurrentVersion(component, current, latest string) (string, string) {
+	current = strings.TrimSpace(current)
+	if current == "" || isInvalidComponentVersion(current) {
+		return "-", ""
+	}
+	switch normalizeComponent(component) {
+	case "mosdns":
+		if !isPlaceholderComponentVersion(latest) && componentVersionsEquivalent(current, latest) && current != latest {
+			return latest, current
+		}
+	case "mihomo":
+		if version := firstVersionToken(current); version != "" && version != current {
+			return version, current
+		}
+	}
+	return current, ""
+}
+
+func componentVersionsEquivalent(current, latest string) bool {
+	currentNorm := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(current)), "v")
+	latestNorm := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(latest)), "v")
+	if currentNorm == "" || latestNorm == "" {
+		return false
+	}
+	if currentNorm == latestNorm || strings.Contains(currentNorm, latestNorm) || strings.Contains(latestNorm, currentNorm) {
+		return true
+	}
+	currentCommit := lastComponentCommitToken(currentNorm)
+	latestCommit := lastComponentCommitToken(latestNorm)
+	return currentCommit != "" && latestCommit != "" && currentCommit == latestCommit
+}
+
+func lastComponentCommitToken(value string) string {
+	matches := componentCommitTokenRE.FindAllString(value, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return strings.ToLower(matches[len(matches)-1])
+}
+
+func shouldUseLiveComponentVersion(component, live, stored string) bool {
+	live = strings.TrimSpace(live)
+	stored = strings.TrimSpace(stored)
+	if live == "" || live == "unknown" || live == "not-installed" {
+		return stored == "" || isInvalidComponentVersion(stored) || isSyntheticInstalledVersion(stored)
+	}
+	if isInvalidComponentVersion(stored) || isSyntheticInstalledVersion(stored) || stored == "" || stored == "latest" {
+		return true
+	}
+	if component == "mosdns" || component == "mihomo" {
+		return live != "installed"
+	}
+	return false
+}
+
+func isSyntheticInstalledVersion(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "installed" || strings.HasPrefix(value, "installed-") {
+		return true
+	}
+	return false
+}
+
+func isPlaceholderComponentVersion(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	return value == "" || value == "-" || value == "latest"
+}
+
+func isInvalidComponentVersion(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	return value == "<nil>" || value == "nil" || value == "<null>" || value == "null"
 }
 
 func (a *App) componentUpdateConfig(component string) map[string]any {
@@ -592,17 +902,35 @@ func (a *App) componentCurrentVersion(component string) string {
 		return "unknown"
 	}
 	if _, err := os.Stat(target); err == nil {
-		if info, err := os.Stat(target); err == nil {
-			return "installed-" + info.ModTime().Format("200601021504")
+		if version := componentBinaryVersion(component, target); version != "" {
+			return version
 		}
 		return "installed"
 	}
 	if component == "mihomo" {
-		if _, err := os.Stat(filepath.Join(a.DataDir, "data/binaries/mihomo/latest/mihomo")); err == nil {
+		legacyTarget := filepath.Join(a.DataDir, "data/binaries/mihomo/latest/mihomo")
+		if _, err := os.Stat(legacyTarget); err == nil {
+			if version := componentBinaryVersion(component, legacyTarget); version != "" {
+				return version
+			}
 			return "installed"
 		}
 	}
 	return "not-installed"
+}
+
+func componentBinaryVersion(component, target string) string {
+	switch component {
+	case "mosdns":
+		if out, err := exec.Command(target, "version").CombinedOutput(); err == nil {
+			return compactVersionOutput(string(out))
+		}
+	case "mihomo":
+		if out, err := exec.Command(target, "-v").CombinedOutput(); err == nil {
+			return compactVersionOutput(string(out))
+		}
+	}
+	return ""
 }
 
 func normalizeComponent(component string) string {
@@ -747,7 +1075,7 @@ func downloadAssetName(rawURL string) string {
 func versionDifferent(current, latest string) bool {
 	current = strings.TrimPrefix(strings.TrimSpace(strings.ToLower(current)), "v")
 	latest = strings.TrimPrefix(strings.TrimSpace(strings.ToLower(latest)), "v")
-	return current != "" && latest != "" && current != latest && !strings.Contains(current, "dev")
+	return current != "" && latest != "" && current != latest && !strings.Contains(current, latest) && !strings.Contains(current, "dev")
 }
 
 func shortSHA(sha string) string {

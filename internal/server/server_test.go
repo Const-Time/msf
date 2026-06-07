@@ -546,6 +546,174 @@ func TestSelfUpdateStateExposesInstallAndAcceleratedDownloadURL(t *testing.T) {
 	}
 }
 
+func TestComponentRemoteVersionParsesReleaseMetadata(t *testing.T) {
+	app := newTestApp(t)
+
+	mosdns := githubRelease{
+		TagName: "mosdns",
+		Body:    "源码时间: 2026-05-15 16:16:33\n版本号: ph-yyds-20260515-7a2a3f3\nCommit: 7a2a3f397561f750874b0fcbd1ba131e2844af46\n",
+	}
+	if got := app.componentRemoteVersion("mosdns", mosdns); got != "ph-yyds-20260515-7a2a3f3" {
+		t.Fatalf("mosdns remote version = %q", got)
+	}
+
+	mihomoBody := "更新 [mihomo Meta 版](https://github.com/MetaCubeX/mihomo/tree/Meta)至 v1.19.27，发布于 2026-06-06\n更新 [mihomo Alpha 版](https://github.com/MetaCubeX/mihomo/tree/Alpha)至 checksums.txt，发布于 2026-06-06"
+	if got := mihomoReleaseBodyVersion(mihomoBody, "meta"); got != "v1.19.27" {
+		t.Fatalf("mihomo meta remote version = %q", got)
+	}
+	if got := mihomoReleaseBodyVersion(mihomoBody, "alpha"); got != "v1.19.27" {
+		t.Fatalf("mihomo alpha fallback version = %q", got)
+	}
+
+	if got := app.componentRemoteVersion("zashboard", githubRelease{TagName: "v3.7.1"}); got != "v3.7.1" {
+		t.Fatalf("zashboard remote version = %q", got)
+	}
+	if componentHasUpdate("dev-20260604-7a2a3f3", "ph-yyds-20260515-7a2a3f3") {
+		t.Fatal("mosdns builds with the same commit should not report an update")
+	}
+	if !componentHasUpdate("dev-20260604-1111111", "ph-yyds-20260515-7a2a3f3") {
+		t.Fatal("different component commits should report an update")
+	}
+}
+
+func TestComponentUpdateStateUsesLiveVersionAndDropsPlaceholders(t *testing.T) {
+	app := newTestApp(t)
+	bin := filepath.Join(app.DataDir, "data/binaries/mosdns/mosdns")
+	if err := os.MkdirAll(filepath.Dir(bin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'mosdns version ph-yyds-20260515-7a2a3f3'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if _, err := app.DB.Exec(`insert into component_update_info(component,current_version,latest_version,has_update,download_url,status,progress,last_check_time,created_at,updated_at)
+		values(?,?,?,?,?,?,?,?,?,?)`, "mosdns", "installed-202606071234", "latest", true, "https://example.com/mosdns.zip", "checked", 0, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	state := app.componentUpdateState("mosdns")
+	if got := state["current_version"].(string); !strings.Contains(got, "ph-yyds-20260515-7a2a3f3") {
+		t.Fatalf("current version should come from binary, got %q", got)
+	}
+	if got := state["latest_version"]; got != "-" {
+		t.Fatalf("placeholder latest version should be hidden, got %#v", got)
+	}
+	if got := state["has_update"]; got != false {
+		t.Fatalf("placeholder latest version should not report update, got %#v", got)
+	}
+}
+
+func TestComponentUpdateStateDisplaysEquivalentMosDNSPackageVersion(t *testing.T) {
+	app := newTestApp(t)
+	bin := filepath.Join(app.DataDir, "data/binaries/mosdns/mosdns")
+	if err := os.MkdirAll(filepath.Dir(bin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'dev-20260604-7a2a3f3'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if _, err := app.DB.Exec(`insert into component_update_info(component,current_version,latest_version,has_update,download_url,status,progress,last_check_time,created_at,updated_at)
+		values(?,?,?,?,?,?,?,?,?,?)`, "mosdns", "dev-20260604-7a2a3f3", "ph-yyds-20260515-7a2a3f3", false, "https://example.com/mosdns.zip", "checked", 0, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	state := app.componentUpdateState("mosdns")
+	if got := state["current_version"]; got != "ph-yyds-20260515-7a2a3f3" {
+		t.Fatalf("equivalent mosdns build should display package version, got %#v", got)
+	}
+	if got := state["current_version_detail"]; got != "dev-20260604-7a2a3f3" {
+		t.Fatalf("mosdns raw binary version should be kept as detail, got %#v", got)
+	}
+	if got := state["has_update"]; got != false {
+		t.Fatalf("same commit should not report update, got %#v", got)
+	}
+	if got := state["can_update"]; got != false {
+		t.Fatalf("known same version should not enable update, got %#v", got)
+	}
+}
+
+func TestComponentUpdateStateExtractsMihomoVersionAndAllowsUncertainOverwrite(t *testing.T) {
+	app := newTestApp(t)
+	bin := filepath.Join(app.DataDir, "data/binaries/mihomo/mihomo")
+	if err := os.MkdirAll(filepath.Dir(bin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	rawVersion := "Mihomo Meta v1.19.26 linux amd64 with go1.26.4 Fri Jun  5 06:04:11 CST 2026 Use tags: with_gvisor"
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho '"+rawVersion+"'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if _, err := app.DB.Exec(`insert into component_update_info(component,current_version,latest_version,has_update,download_url,status,progress,last_check_time,created_at,updated_at)
+		values(?,?,?,?,?,?,?,?,?,?)`, "mihomo", rawVersion, "latest", false, "https://example.com/mihomo.tar.gz", "checked", 0, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	state := app.componentUpdateState("mihomo")
+	if got := state["current_version"]; got != "v1.19.26" {
+		t.Fatalf("mihomo current version should be compact, got %#v", got)
+	}
+	if got := state["current_version_detail"]; got != rawVersion {
+		t.Fatalf("mihomo raw version should be kept as detail, got %#v", got)
+	}
+	if got := state["has_update"]; got != false {
+		t.Fatalf("unknown latest should not claim update, got %#v", got)
+	}
+	if got := state["can_update"]; got != true {
+		t.Fatalf("unknown latest should allow overwrite update, got %#v", got)
+	}
+}
+
+func TestComponentStateStringDoesNotRenderMissingValueAsNil(t *testing.T) {
+	if got := componentStateString(map[string]any{}, "missing"); got != "" {
+		t.Fatalf("missing state value = %q", got)
+	}
+	if got := componentStateString(map[string]any{"value": nil}, "value"); got != "" {
+		t.Fatalf("nil state value = %q", got)
+	}
+}
+
+func TestComponentUpdateStateAllowsZashboardOverwriteWhenCurrentUnknown(t *testing.T) {
+	app := newTestApp(t)
+	index := filepath.Join(app.DataDir, "configs/mihomo/ui/index.html")
+	if err := os.MkdirAll(filepath.Dir(index), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(index, []byte("<!doctype html><html></html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if _, err := app.DB.Exec(`insert into component_update_info(component,current_version,latest_version,has_update,download_url,status,progress,last_check_time,created_at,updated_at)
+		values(?,?,?,?,?,?,?,?,?,?)`, "zashboard", "installed", "v3.7.1", false, "https://example.com/dist.zip", "checked", 0, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	state := app.componentUpdateState("zashboard")
+	if got := state["current_version"]; got != "installed" {
+		t.Fatalf("zashboard unknown current version = %#v", got)
+	}
+	if got := state["has_update"]; got != false {
+		t.Fatalf("unknown zashboard version should not claim update, got %#v", got)
+	}
+	if got := state["can_update"]; got != true {
+		t.Fatalf("unknown zashboard version should allow overwrite, got %#v", got)
+	}
+
+	if _, err := app.DB.Exec(`update component_update_info set current_version=? where component=?`, "<nil>", "zashboard"); err != nil {
+		t.Fatal(err)
+	}
+	state = app.componentUpdateState("zashboard")
+	if got := state["current_version"]; got != "installed" {
+		t.Fatalf("dirty nil zashboard version should fall back to installed, got %#v", got)
+	}
+	if got := state["has_update"]; got != false {
+		t.Fatalf("dirty nil zashboard version should not claim update, got %#v", got)
+	}
+	if got := state["can_update"]; got != true {
+		t.Fatalf("dirty nil zashboard version should allow overwrite, got %#v", got)
+	}
+}
+
 func TestComponentUpdateUploadInstallsZashboardZip(t *testing.T) {
 	app := newTestApp(t)
 	token := tokenForRole(t, app, "admin")

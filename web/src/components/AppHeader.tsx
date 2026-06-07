@@ -11,6 +11,7 @@ import {
   Monitor,
   Moon,
   PanelLeftClose,
+  PanelLeftOpen,
   Settings,
   Sun,
   User,
@@ -48,7 +49,7 @@ function applyTheme(mode: ThemeMode) {
   window.localStorage.setItem("msm-theme", mode);
 }
 
-export function AppHeader({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
+export function AppHeader({ onToggleSidebar, sidebarCollapsed = false }: { onToggleSidebar?: () => void; sidebarCollapsed?: boolean }) {
   const router = useRouter();
   const { user, logout } = useAuth();
   const [theme, setTheme] = useState<ThemeMode>(() => getInitialTheme());
@@ -98,10 +99,10 @@ export function AppHeader({ onToggleSidebar }: { onToggleSidebar?: () => void })
         <button
           onClick={onToggleSidebar}
           className="mr-2 hidden rounded-[10px] p-2 transition-all hover:bg-accent/50 active:scale-95 md:mr-4 md:block"
-          title="折叠侧边栏"
-          aria-label="折叠侧边栏"
+          title={sidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
+          aria-label={sidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
         >
-          <PanelLeftClose className="h-5 w-5" />
+          {sidebarCollapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
         </button>
 
         <div className="flex items-center gap-2 md:gap-3">

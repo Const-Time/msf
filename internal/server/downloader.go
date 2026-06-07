@@ -105,6 +105,7 @@ func mosDNSAssetArch(goarch string, amd64v3 bool) string {
 }
 
 func (a *App) installComponent(component string, emit func(DownloadEvent)) error {
+	component = normalizeComponent(component)
 	if runtime.GOOS != "linux" && component != "zashboard" && component != "ui" {
 		emit(DownloadEvent{Status: "skipped", Progress: 100, Message: "binary download is linux-only; place binary manually on this platform"})
 		return nil
@@ -128,22 +129,44 @@ func (a *App) installComponent(component string, emit func(DownloadEvent)) error
 		return err
 	}
 	emit(DownloadEvent{Status: "running", Progress: 60, Message: "extracting"})
+	if component == "zashboard" || component == "ui" {
+		err := installZashboardArchive(tmp, filepath.Join(a.DataDir, "configs", "mihomo", "ui"))
+		_ = os.Remove(tmp)
+		if err != nil {
+			return err
+		}
+		emit(DownloadEvent{Status: "completed", Progress: 100, Message: component + " installed"})
+		return nil
+	}
+	extractDir, err := os.MkdirTemp(filepath.Join(a.DataDir, "data"), component+"-extract-*")
+	if err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	defer os.RemoveAll(extractDir)
 	if strings.HasSuffix(url, ".zip") {
-		if err := unzip(tmp, filepath.Dir(target)); err != nil {
+		if err := extractZipPreserve(tmp, extractDir); err != nil {
+			_ = os.Remove(tmp)
 			return err
 		}
 	} else {
-		if err := untarGz(tmp, filepath.Dir(target)); err != nil {
-			return err
-		}
-	}
-	if component == "zashboard" || component == "ui" {
-		if err := patchZashboardIndex(filepath.Dir(target)); err != nil {
+		if err := extractTarGzPreserve(tmp, extractDir); err != nil {
+			_ = os.Remove(tmp)
 			return err
 		}
 	}
 	_ = os.Remove(tmp)
-	_ = chmodExecutables(filepath.Dir(target))
+	candidate := findUploadedBinary(extractDir, component)
+	if candidate == "" {
+		return fmt.Errorf("no %s binary found in downloaded package", component)
+	}
+	if err := validateUploadedLinuxBinary(candidate); err != nil {
+		return err
+	}
+	if err := copyFile(candidate, target, 0755); err != nil {
+		return err
+	}
+	_ = os.Chmod(target, 0755)
 	emit(DownloadEvent{Status: "completed", Progress: 100, Message: component + " installed"})
 	return nil
 }
