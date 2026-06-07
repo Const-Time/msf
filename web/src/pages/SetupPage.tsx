@@ -639,7 +639,7 @@ function SetupDownloadView({
           <div className="mb-4 flex justify-center">
             <div className="relative">
               <div className="absolute inset-0 rounded-full bg-primary/20 blur-xl" />
-              <img src="/logo/logo-square.svg" alt="MSM" className="relative z-10 h-16 w-16" />
+              <img src="/logo/logo-square.png" alt="MSM" className="relative z-10 h-16 w-16" />
             </div>
           </div>
           <h2 className="mb-2 text-2xl font-bold tracking-normal text-foreground">
@@ -1040,7 +1040,7 @@ export function SetupPage() {
 
       <main className="mx-auto w-full max-w-[896px] px-2 pb-8 pt-10">
         <header className="flex items-center gap-3 px-7">
-          <img src="/logo/logo-square.svg" alt="MSM" className="h-9 w-9" />
+          <img src="/logo/logo-square.png" alt="MSM" className="h-9 w-9" />
           <h1 className="text-xl font-bold tracking-normal text-foreground">MSM 初始化向导</h1>
         </header>
 

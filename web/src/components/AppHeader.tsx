@@ -105,8 +105,8 @@ export function AppHeader({ onToggleSidebar }: { onToggleSidebar?: () => void })
         </button>
 
         <div className="flex items-center gap-2 md:gap-3">
-          <div className="rounded-[10px] bg-gradient-to-br from-primary/10 to-secondary/10 p-1 md:p-1.5">
-            <Image alt="MSM" src="/logo/logo-square.svg" width={24} height={24} className="h-5 w-5 md:h-6 md:w-6" />
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-primary/10 to-secondary/10 md:h-10 md:w-10">
+            <Image alt="MSM" src="/logo/logo-square.png" width={32} height={32} className="h-7 w-7 object-contain md:h-8 md:w-8" />
           </div>
           <span className="bg-gradient-to-r from-primary to-secondary bg-clip-text text-lg font-bold text-transparent md:text-xl">
             MSM
