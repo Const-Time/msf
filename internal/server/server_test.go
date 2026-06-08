@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -1099,6 +1100,45 @@ func TestMosDNS9099TakesPriorityForQueryLogsAndOverview(t *testing.T) {
 	overview := requestJSON(t, app, http.MethodGet, "/api/v1/mosdns/overview", token, nil)
 	if overview.Code != http.StatusOK || !strings.Contains(overview.Body.String(), `"source":"mosdns_9099"`) || !strings.Contains(overview.Body.String(), `"query_count":77`) || !strings.Contains(overview.Body.String(), `"upstream_stats":[`) || !strings.Contains(overview.Body.String(), `"detailed_cache"`) || !strings.Contains(overview.Body.String(), `"audit_stats"`) {
 		t.Fatalf("overview should include 9099 stats: status=%d body=%s", overview.Code, overview.Body.String())
+	}
+}
+
+func TestMosDNSSystemCacheUsesGeneratedDomainBuckets(t *testing.T) {
+	app := newTestApp(t)
+	token := tokenForRole(t, app, "admin")
+	genDir := filepath.Join(app.DataDir, "configs/mosdns/gen")
+	if err := os.WriteFile(filepath.Join(genDir, "realiplist.txt"), []byte("2026-06-08 apple.com 3\nfull:example.cn\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(genDir, "fakeiprule.txt"), []byte("domain:chatgpt.com\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(genDir, "nov4list.txt"), []byte("no-a.example\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(genDir, "nodenov6rule.txt"), []byte("domain:no-aaaa.example\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := requestJSON(t, app, http.MethodGet, "/api/v1/mosdns/system/cache", token, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("system cache status=%d body=%s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	_ = json.Unmarshal(res.Body.Bytes(), &body)
+	data := body["data"].(map[string]any)
+	stats := data["stats"].(map[string]any)
+	if stats["realIp"].(float64) != 2 || stats["fakeIp"].(float64) != 1 || stats["noV4"].(float64) != 1 || stats["noV6"].(float64) != 1 || stats["totalDomains"].(float64) != 5 {
+		t.Fatalf("system cache stats should use generated buckets: %s", res.Body.String())
+	}
+	domains := data["domains"].(map[string]any)
+	if !strings.Contains(fmt.Sprint(domains["realIp"]), "apple.com") || !strings.Contains(fmt.Sprint(domains["fakeIp"]), "chatgpt.com") {
+		t.Fatalf("system cache domains should expose generated buckets: %s", res.Body.String())
+	}
+
+	detail := requestJSON(t, app, http.MethodGet, "/api/v1/mosdns/cache/detailed", token, nil)
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"totalDomains":5`) || !strings.Contains(detail.Body.String(), "no-aaaa.example") {
+		t.Fatalf("detailed cache should expose generated stats/domains: status=%d body=%s", detail.Code, detail.Body.String())
 	}
 }
 
