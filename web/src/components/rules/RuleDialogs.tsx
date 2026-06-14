@@ -82,6 +82,13 @@ const MODE_OPTIONS = [
   { value: "regexp", label: "正则 regexp" },
 ];
 
+function rulePatternFor(mode: string, value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (/^(domain|full|keyword|regexp):/.test(trimmed)) return trimmed;
+  return `${mode}:${trimmed}`;
+}
+
 export type RuleSetTypeOption = {
   value: string;
   label: string;
@@ -302,86 +309,234 @@ export function AddRuleSetModal({
 }
 
 export function AddRuleModal({
+  categoryId,
   categoryLabel,
   onClose,
   onAdd,
 }: {
+  categoryId: string;
   categoryLabel: string;
   onClose: () => void;
-  onAdd: (mode: string, value: string) => void;
+  onAdd: (pattern: string) => void;
 }) {
   const [mode, setMode] = useState("domain");
   const [value, setValue] = useState("");
+  const [target, setTarget] = useState("");
+  const normalizedCategory = categoryId === "rewrite" ? "redirect" : categoryId;
+  const isDDNS = normalizedCategory === "ddnslist";
+  const isDirectIP = normalizedCategory === "direct_ip";
+  const isRedirect = normalizedCategory === "redirect";
+  const canSubmit = isRedirect ? Boolean(value.trim() && target.trim()) : Boolean(value.trim());
+
+  const submit = () => {
+    if (!canSubmit) return;
+    if (isRedirect) {
+      onAdd(`${rulePatternFor(mode, value)} ${target.trim()}`);
+      return;
+    }
+    onAdd(isDDNS || isDirectIP ? value.trim() : rulePatternFor(mode, value));
+  };
+
+  const labelCls = "text-sm font-bold text-foreground mb-3 flex items-center gap-2";
+  const hintCls = "text-xs text-muted-foreground mt-2 ml-1";
+  const exampleItemCls = "px-3 py-2 rounded-lg bg-background/60";
+  const buttonCls = primaryCls;
 
   return (
-    <ModalShell onClose={onClose}>
+    <ModalShell onClose={onClose} className="max-w-[600px]">
       <DialogHeader
         title="添加规则"
         icon={<span className="text-primary">＋</span>}
         subtitle={<>添加新的 {categoryLabel} 规则</>}
       />
       <div className="p-6 space-y-5">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          <div>
-            <label className="text-sm font-bold text-foreground mb-3 flex items-center gap-2">
-              <span className="h-1 w-1 rounded-full bg-primary" />
-              匹配规则
-            </label>
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value)}
-              className={inputCls}
-            >
-              {MODE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-            <p className="text-xs text-muted-foreground mt-2 ml-1">选择匹配方式</p>
-          </div>
-          <div>
-            <label className="text-sm font-bold text-foreground mb-3 flex items-center gap-2">
-              <span className="h-1 w-1 rounded-full bg-primary" />
-              规则值
-            </label>
-            <input
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder="例如: example.com"
-              className={inputCls}
-            />
-            <p className="text-xs text-muted-foreground mt-2 ml-1">
-              无需包含前缀，前缀由匹配规则选择生成
-            </p>
-          </div>
-        </div>
-        <div className="bg-gradient-to-br from-muted/40 to-muted/20 rounded-xl p-5 border-2 border-border/30 shadow-inner">
-          <label className="text-sm font-bold text-foreground mb-3 flex items-center gap-2">
-            <Info className="h-4 w-4 text-primary" />
-            示例
-          </label>
-          <div className="space-y-2 text-xs text-muted-foreground font-mono">
-            {[
-              "domain:example.com（含子域名）",
-              "full:www.example.com（仅此域名）",
-              "keyword:google（包含关键字）",
-              "regexp:.+\\.example\\.com$（正则）",
-            ].map((ex) => (
-              <div key={ex} className="px-3 py-2 rounded-lg bg-background/60">
-                • {ex}
+        {isDDNS && (
+          <>
+            <div>
+              <label className={labelCls}>
+                <span className="h-1 w-1 rounded-full bg-primary" />
+                域名
+              </label>
+              <input
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="例如: example.com"
+                className={inputCls}
+                autoFocus
+              />
+              <p className={hintCls}>直接输入域名即可</p>
+            </div>
+            <div className="bg-gradient-to-br from-muted/40 to-muted/20 rounded-xl p-5 border-2 border-border/30 shadow-inner">
+              <label className={labelCls}>
+                <Info className="h-4 w-4 text-primary" />
+                示例
+              </label>
+              <div className="space-y-2 text-xs text-muted-foreground font-mono">
+                {["example.com", "ddns.example.com"].map((ex) => (
+                  <div key={ex} className={exampleItemCls}>
+                    • {ex}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-        </div>
+            </div>
+          </>
+        )}
+
+        {isDirectIP && (
+          <>
+            <div>
+              <label className={labelCls}>
+                <span className="h-1 w-1 rounded-full bg-primary" />
+                IP段
+              </label>
+              <input
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="例如: 17.0.0.0/8"
+                className={inputCls}
+                autoFocus
+              />
+              <p className={hintCls}>输入CIDR格式的IP段</p>
+            </div>
+            <div className="bg-gradient-to-br from-muted/40 to-muted/20 rounded-xl p-5 border-2 border-border/30 shadow-inner">
+              <label className={labelCls}>
+                <Info className="h-4 w-4 text-primary" />
+                说明
+              </label>
+              <div className="space-y-2 text-xs text-muted-foreground">
+                <div className={exampleItemCls}>
+                  不在任何域名清单中的域名解析后的IP属于此IP清单时，此域名将被归入直连域名。
+                </div>
+                <div className={`${exampleItemCls} font-mono`}>• 17.0.0.0/8（苹果公司IP段）</div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {isRedirect && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+              <div>
+                <label className={labelCls}>
+                  <span className="h-1 w-1 rounded-full bg-primary" />
+                  匹配规则
+                </label>
+                <select value={mode} onChange={(e) => setMode(e.target.value)} className={inputCls} autoFocus>
+                  {MODE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <p className={hintCls}>可选匹配方式</p>
+              </div>
+              <div>
+                <label className={labelCls}>
+                  <span className="h-1 w-1 rounded-full bg-primary" />
+                  原域名
+                </label>
+                <input
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  placeholder="例如: example.com"
+                  className={inputCls}
+                />
+                <p className={hintCls}>需要重定向的域名</p>
+              </div>
+              <div>
+                <label className={labelCls}>
+                  <span className="h-1 w-1 rounded-full bg-primary" />
+                  重定向目标
+                </label>
+                <input
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  placeholder="例如: 1.2.3.4"
+                  className={inputCls}
+                />
+                <p className={hintCls}>IP地址或域名</p>
+              </div>
+            </div>
+            <div className="bg-gradient-to-br from-muted/40 to-muted/20 rounded-xl p-5 border-2 border-border/30 shadow-inner">
+              <label className={labelCls}>
+                <Info className="h-4 w-4 text-primary" />
+                示例
+              </label>
+              <div className="space-y-2 text-xs text-muted-foreground font-mono">
+                {[
+                  "原域名: example.com，目标: 1.2.3.4（重定向到IP）",
+                  "原域名: test.com，目标: example.com（重定向到域名）",
+                  "匹配: domain，原域名: sub.example.com，目标: 1.2.3.4（含子域名）",
+                ].map((ex) => (
+                  <div key={ex} className={exampleItemCls}>
+                    • {ex}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {!isDDNS && !isDirectIP && !isRedirect && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div>
+                <label className={labelCls}>
+                  <span className="h-1 w-1 rounded-full bg-primary" />
+                  匹配规则
+                </label>
+                <select value={mode} onChange={(e) => setMode(e.target.value)} className={inputCls} autoFocus>
+                  {MODE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <p className={hintCls}>选择匹配方式</p>
+              </div>
+              <div>
+                <label className={labelCls}>
+                  <span className="h-1 w-1 rounded-full bg-primary" />
+                  规则值
+                </label>
+                <input
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  placeholder="例如: example.com"
+                  className={inputCls}
+                />
+                <p className={hintCls}>无需包含前缀，前缀由匹配规则选择生成</p>
+              </div>
+            </div>
+            <div className="bg-gradient-to-br from-muted/40 to-muted/20 rounded-xl p-5 border-2 border-border/30 shadow-inner">
+              <label className={labelCls}>
+                <Info className="h-4 w-4 text-primary" />
+                示例
+              </label>
+              <div className="space-y-2 text-xs text-muted-foreground font-mono">
+                {[
+                  "domain:example.com（含子域名）",
+                  "full:www.example.com（仅此域名）",
+                  "keyword:google（包含关键字）",
+                  "regexp:.+\\.example\\.com$（正则）",
+                ].map((ex) => (
+                  <div key={ex} className={exampleItemCls}>
+                    • {ex}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
       </div>
       <div className="p-6 border-t-2 border-border/30 flex justify-end gap-3 bg-gradient-to-r from-muted/20 to-transparent">
         <button onClick={onClose} className={cancelCls}>
           <X className="h-4 w-4" />取消
         </button>
         <button
-          onClick={() => value.trim() && onAdd(mode, value.trim())}
-          className={primaryCls}
+          aria-disabled={!canSubmit}
+          onClick={submit}
+          className={buttonCls}
         >
           <Check className="h-4 w-4" />添加
         </button>

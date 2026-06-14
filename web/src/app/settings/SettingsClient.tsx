@@ -55,6 +55,12 @@ interface InitConfigState {
   nodeMode: NodeEditMode;
   shareNodes: string[];
   yamlNodes: string;
+  githubProxyEnabled: boolean;
+  githubHttpsProxy: string;
+  githubHttpProxy: string;
+  githubSocks5Proxy: string;
+  githubAcceleratorEnabled: boolean;
+  githubAcceleratorUrl: string;
 }
 
 interface VersionInfo {
@@ -299,6 +305,12 @@ const defaultInitConfig: InitConfigState = {
   nodeMode: "share",
   shareNodes: [],
   yamlNodes: "",
+  githubProxyEnabled: false,
+  githubHttpsProxy: "",
+  githubHttpProxy: "",
+  githubSocks5Proxy: "",
+  githubAcceleratorEnabled: false,
+  githubAcceleratorUrl: "",
 };
 
 const defaultUpdateConfig: UpdateConfigState = {
@@ -382,6 +394,12 @@ function setupToInitConfig(raw: any): InitConfigState {
     nodeMode: mihomoProxies.trim().startsWith("proxies:") ? "yaml" : "share",
     shareNodes,
     yamlNodes: mihomoProxies.trim().startsWith("proxies:") ? mihomoProxies : "",
+    githubProxyEnabled: Boolean(data.github_proxy_enabled ?? data.githubProxyEnabled),
+    githubHttpsProxy: String(data.github_https_proxy || data.githubHTTPSProxy || ""),
+    githubHttpProxy: String(data.github_http_proxy || data.githubHTTPProxy || ""),
+    githubSocks5Proxy: String(data.github_socks5_proxy || data.githubSocks5Proxy || ""),
+    githubAcceleratorEnabled: Boolean(data.github_accelerator_enabled ?? data.githubAcceleratorEnabled),
+    githubAcceleratorUrl: String(data.github_accelerator_url || data.githubAcceleratorURL || ""),
   };
 }
 
@@ -396,6 +414,12 @@ function initConfigToSetupPayload(config: InitConfigState) {
     enable_ipv6: config.ipv6,
     subscription_urls: serializeSubscriptions(config.subscriptions),
     mihomo_proxies: config.nodeMode === "yaml" ? config.yamlNodes : config.shareNodes.filter(Boolean).join("\n"),
+    github_proxy_enabled: config.githubProxyEnabled,
+    github_https_proxy: config.githubHttpsProxy.trim(),
+    github_http_proxy: config.githubHttpProxy.trim(),
+    github_socks5_proxy: config.githubSocks5Proxy.trim(),
+    github_accelerator_enabled: config.githubAcceleratorEnabled,
+    github_accelerator_url: config.githubAcceleratorUrl.trim(),
   };
 }
 
@@ -690,7 +714,8 @@ function InitConfigSummary({
         <PlainInfo label="DNS 启用地址" value={config.dnsEnable} />
         <PlainInfo label="DNS 禁用地址" value={config.dnsDisable} />
         <PlainInfo label="启用 IPv6" value={config.ipv6 ? "已启用" : "DNS自动设置"} />
-        <PlainInfo label="运行时DNS" value="" />
+        <PlainInfo label="代理服务器" value={config.githubProxyEnabled ? "已启用" : "已禁用"} />
+        <PlainInfo label="GitHub 加速源" value={config.githubAcceleratorEnabled ? "已启用" : "已禁用"} />
       </div>
       <div className="mt-5 grid gap-3 md:grid-cols-2">
         {config.subscriptions.map((item) => (
@@ -856,6 +881,101 @@ function InitConfigEditor({
         <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
           开启后代理核心将支持 IPv6 流量处理，关闭则仅处理 IPv4 流量。如果您的网络不支持 IPv6，请务必关闭此选项
         </p>
+      </SectionBox>
+
+      <SectionBox>
+        <div className="mb-4">
+          <h3 className="text-lg font-semibold text-foreground">加速设置</h3>
+          <p className="mt-1 text-sm text-muted-foreground">用于组件下载和版本更新，可分别配置代理服务器与 GitHub 加速源</p>
+        </div>
+        <div className="grid gap-4 xl:grid-cols-2">
+          <div className="rounded-lg border border-border/60 bg-card/50 p-4">
+            <label className="flex items-start gap-3 text-base font-semibold text-foreground">
+              <input
+                type="checkbox"
+                checked={draft.githubProxyEnabled}
+                onChange={(event) => setDraft((current) => ({ ...current, githubProxyEnabled: event.target.checked }))}
+                className="mt-0.5 h-5 w-5 accent-primary"
+              />
+              <span>
+                代理服务器
+                <span className="mt-1 block text-xs font-normal text-muted-foreground">使用 HTTP / HTTPS / SOCKS5 代理下载组件</span>
+              </span>
+            </label>
+            <div className="mt-4 space-y-3">
+              <Field label="HTTPS 代理服务器">
+                <input
+                  value={draft.githubHttpsProxy}
+                  onChange={(event) => setDraft((current) => ({ ...current, githubHttpsProxy: event.target.value }))}
+                  placeholder="例如: http://127.0.0.1:7890"
+                  className={`${inputClass} h-11 text-sm`}
+                />
+              </Field>
+              <Field label="HTTP 代理服务器">
+                <input
+                  value={draft.githubHttpProxy}
+                  onChange={(event) => setDraft((current) => ({ ...current, githubHttpProxy: event.target.value }))}
+                  placeholder="例如: http://127.0.0.1:7890"
+                  className={`${inputClass} h-11 text-sm`}
+                />
+              </Field>
+              <Field label="SOCKS5 代理服务器">
+                <input
+                  value={draft.githubSocks5Proxy}
+                  onChange={(event) => setDraft((current) => ({ ...current, githubSocks5Proxy: event.target.value }))}
+                  placeholder="例如: socks5://127.0.0.1:7891"
+                  className={`${inputClass} h-11 text-sm`}
+                />
+              </Field>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border/60 bg-card/50 p-4">
+            <label className="flex items-start gap-3 text-base font-semibold text-foreground">
+              <input
+                type="checkbox"
+                checked={draft.githubAcceleratorEnabled}
+                onChange={(event) => setDraft((current) => ({ ...current, githubAcceleratorEnabled: event.target.checked }))}
+                className="mt-0.5 h-5 w-5 accent-primary"
+              />
+              <span>
+                GitHub 加速源
+                <span className="mt-1 block text-xs font-normal text-muted-foreground">使用 GitHub 加速镜像下载组件</span>
+              </span>
+            </label>
+            <div className="mt-4 space-y-3">
+              <Field label="加速前缀">
+                <input
+                  value={draft.githubAcceleratorUrl}
+                  onChange={(event) => setDraft((current) => ({ ...current, githubAcceleratorUrl: event.target.value }))}
+                  placeholder="例如: https://gh-proxy.com"
+                  className={`${inputClass} h-11 text-sm`}
+                />
+              </Field>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  ["Cloudflare", "https://gh-proxy.com"],
+                  ["Fastly CDN", "https://cdn.gh-proxy.com"],
+                  ["EdgeOne", "https://edgeone.gh-proxy.com"],
+                ].map(([label, value]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setDraft((current) => ({ ...current, githubAcceleratorUrl: value }))}
+                    className={cn(
+                      "rounded-md border px-3 py-1.5 text-xs font-medium transition",
+                      draft.githubAcceleratorUrl === value
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-background text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
       </SectionBox>
 
       <SectionBox>

@@ -245,12 +245,12 @@ export default function MosdnsRulesPage() {
     await Promise.all([loadCategories(), loadRuleSets(), activeCat ? loadRules(activeCat) : Promise.resolve()]);
   };
 
-  const handleAdd = async (mode: string, value: string) => {
+  const handleAdd = async (pattern: string) => {
     if (!activeCat) return;
     try {
       await api(`/api/v1/mosdns/rules/${encodeURIComponent(activeCat)}`, {
         method: "POST",
-        body: JSON.stringify({ pattern: patternFor(mode, value) }),
+        body: JSON.stringify({ pattern }),
       });
       setModal(null);
       showToast("添加成功");
@@ -694,7 +694,7 @@ export default function MosdnsRulesPage() {
       </div>
 
       {modal === "add" && category && (
-        <AddRuleModal categoryLabel={category.label} onClose={() => setModal(null)} onAdd={handleAdd} />
+        <AddRuleModal categoryId={category.id} categoryLabel={category.label} onClose={() => setModal(null)} onAdd={handleAdd} />
       )}
       {modal === "import" && category && (
         <ImportRulesModal categoryLabel={category.label} onClose={() => setModal(null)} onImport={handleImport} />

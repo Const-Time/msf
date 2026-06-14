@@ -1101,6 +1101,19 @@ func TestMosDNSObservabilityAndRuleCategories(t *testing.T) {
 	if !reflect.DeepEqual(gotIDs, wantIDs) {
 		t.Fatalf("personal-list categories should match MSF order, got %#v want %#v", gotIDs, wantIDs)
 	}
+	redirectPattern := "domain:codex-redirect.example.com 1.2.3.4"
+	addRedirect := requestJSON(t, app, http.MethodPost, "/api/v1/mosdns/rules/redirect", token, map[string]any{"pattern": redirectPattern})
+	if addRedirect.Code != http.StatusOK || !strings.Contains(addRedirect.Body.String(), redirectPattern) {
+		t.Fatalf("redirect rule add failed: status=%d body=%s", addRedirect.Code, addRedirect.Body.String())
+	}
+	rewriteFile := filepath.Join(app.DataDir, "configs/mosdns/rule/rewrite.txt")
+	rewriteContent, err := os.ReadFile(rewriteFile)
+	if err != nil {
+		t.Fatalf("rewrite rule file should exist after redirect write: %v", err)
+	}
+	if !strings.Contains(string(rewriteContent), redirectPattern) {
+		t.Fatalf("redirect category should write MosDNS rewrite.txt, got %s", string(rewriteContent))
+	}
 	special := categories["special_categories"].([]any)
 	if len(special) != 2 {
 		t.Fatalf("expected adguard/online in special categories: %s", res.Body.String())
@@ -2106,6 +2119,65 @@ func TestBasicManagementUsersTokensSettingsAndDiagnostics(t *testing.T) {
 	}
 	if data["github_proxy_enabled"] != true || data["github_https_proxy"] != "http://127.0.0.1:7890" || data["github_socks5_proxy"] != "socks5://127.0.0.1:7891" || data["github_accelerator_enabled"] != true || data["github_accelerator_url"] != "https://gh-proxy.com" {
 		t.Fatalf("setup config should preserve github download options: %#v", data)
+	}
+	legacySetup := requestJSON(t, app, http.MethodPut, "/api/v1/setup/config", token, map[string]any{
+		"username":           "root",
+		"selected_interface": "eth1",
+		"subscription_urls":  "imm|https://example.com/sub.yaml",
+		"proxy_core":         "mihomo",
+		"mos_dns_enabled":    true,
+		"auto_set_dns":       true,
+		"enable_ipv6":        true,
+		"mihomo_proxies":     "trojan://pass@example.org:443?sni=example.org#manual-node",
+	})
+	if legacySetup.Code != http.StatusOK {
+		t.Fatalf("legacy setup config save failed: status=%d body=%s", legacySetup.Code, legacySetup.Body.String())
+	}
+	setupGet = requestJSON(t, app, http.MethodGet, "/api/v1/setup/config", token, nil)
+	if setupGet.Code != http.StatusOK {
+		t.Fatalf("setup config get after legacy save failed: status=%d body=%s", setupGet.Code, setupGet.Body.String())
+	}
+	if err := json.Unmarshal(setupGet.Body.Bytes(), &setupBody); err != nil {
+		t.Fatal(err)
+	}
+	data, ok = setupBody["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("setup config get after legacy save should expose data object: %#v", setupBody["data"])
+	}
+	if data["github_proxy_enabled"] != true || data["github_https_proxy"] != "http://127.0.0.1:7890" || data["github_socks5_proxy"] != "socks5://127.0.0.1:7891" || data["github_accelerator_enabled"] != true || data["github_accelerator_url"] != "https://gh-proxy.com" {
+		t.Fatalf("legacy setup config save should retain omitted github download options: %#v", data)
+	}
+	closeSetup := requestJSON(t, app, http.MethodPut, "/api/v1/setup/config", token, map[string]any{
+		"username":                   "root",
+		"selected_interface":         "eth1",
+		"subscription_urls":          "imm|https://example.com/sub.yaml",
+		"proxy_core":                 "mihomo",
+		"mos_dns_enabled":            true,
+		"auto_set_dns":               true,
+		"enable_ipv6":                true,
+		"mihomo_proxies":             "trojan://pass@example.org:443?sni=example.org#manual-node",
+		"github_proxy_enabled":       false,
+		"github_accelerator_enabled": false,
+	})
+	if closeSetup.Code != http.StatusOK {
+		t.Fatalf("setup config close github options failed: status=%d body=%s", closeSetup.Code, closeSetup.Body.String())
+	}
+	setupGet = requestJSON(t, app, http.MethodGet, "/api/v1/setup/config", token, nil)
+	if setupGet.Code != http.StatusOK {
+		t.Fatalf("setup config get after close failed: status=%d body=%s", setupGet.Code, setupGet.Body.String())
+	}
+	if err := json.Unmarshal(setupGet.Body.Bytes(), &setupBody); err != nil {
+		t.Fatal(err)
+	}
+	data, ok = setupBody["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("setup config get after close should expose data object: %#v", setupBody["data"])
+	}
+	if data["github_proxy_enabled"] != false || data["github_accelerator_enabled"] != false {
+		t.Fatalf("explicit false should disable github download options: %#v", data)
+	}
+	if data["github_https_proxy"] != "http://127.0.0.1:7890" || data["github_socks5_proxy"] != "socks5://127.0.0.1:7891" || data["github_accelerator_url"] != "https://gh-proxy.com" {
+		t.Fatalf("explicit false should keep existing github download values: %#v", data)
 	}
 	manualProvider, err := os.ReadFile(filepath.Join(app.DataDir, "configs/mihomo/proxy_providers/msf_manual.yaml"))
 	if err != nil {
