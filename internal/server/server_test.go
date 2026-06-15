@@ -70,7 +70,7 @@ func TestSetupInitializeLoginAndGeneratedConfigs(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(cfg)
-	for _, want := range []string{"proxy-providers:", "msf_manual:", "https://example.com/a.yaml", "机场A", "机场1", "tproxy-port: 7896", "listen: 0.0.0.0:6666", "fake-ip-range: 28.0.0.1/8", "UrlTest: &UrlTest", "DOMAIN-SUFFIX,sssaicode.com,DIRECT", "DOMAIN-SUFFIX,huggingface.co,美国节点", "proxies: [DIRECT], include-all: true, include-all-proxies: true, include-all-providers: true", "name: 机场节点, type: select, proxies: [DIRECT], include-all: true, include-all-proxies: true, include-all-providers: true"} {
+	for _, want := range []string{"proxy-providers:", "msf_manual:", "https://example.com/a.yaml", "机场A", "机场1", "tproxy-port: 7896", "listen: 0.0.0.0:6666", "fake-ip-range: 28.0.0.1/8", "UrlTest: &UrlTest", "global-client-fingerprint: chrome", "sniffer:", "enable: true", "name: 谷歌服务", "Private-Domain:", "Private-IP:", "RULE-SET,Google,谷歌服务", "RULE-SET,Microsoft-CN,全球直连", "name: 机场节点, type: select, include-all: true, include-all-proxies: true, include-all-providers: true"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("mihomo config missing %q:\n%s", want, text)
 		}
@@ -1879,7 +1879,7 @@ func TestMihomoConfigAndLogPanelCompatibility(t *testing.T) {
 		t.Fatalf("mihomo logs filtering mismatch: status=%d body=%s", logs.Code, logs.Body.String())
 	}
 	config := requestJSON(t, app, http.MethodGet, "/api/v1/mihomo/config", token, nil)
-	if config.Code != http.StatusOK || !strings.Contains(config.Body.String(), "proxy-providers:") || !strings.Contains(config.Body.String(), "DOMAIN-SUFFIX,sssaicode.com,DIRECT") {
+	if config.Code != http.StatusOK || !strings.Contains(config.Body.String(), "proxy-providers:") || !strings.Contains(config.Body.String(), "RULE-SET,Google,谷歌服务") {
 		t.Fatalf("mihomo raw config should expose complete config.yaml: status=%d body=%s", config.Code, config.Body.String())
 	}
 	put := requestJSON(t, app, http.MethodPut, "/api/v1/mihomo/config/config.yaml", token, map[string]any{"content": "mode: rule\nmixed-port: 7892\n"})
