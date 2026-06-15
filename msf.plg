@@ -7,7 +7,7 @@
 <!ENTITY packageName "msf-0.3.3-x86_64-1">
 <!ENTITY packageFile "&packageName;.txz">
 <!ENTITY packageURL "https://github.com/&githubRepo;/releases/download/&releaseTag;/&packageFile;">
-<!ENTITY packageSHA256 "f7af13f3ad2042e12e733cfd51576aae9d5544066621b8f9d7a6113bd39220f4">
+<!ENTITY packageSHA256 "ac237da34af976a2f94e688494124c13fa5ce841139c4f5b649196e03ddb8c71">
 ]>
 <PLUGIN name="&name;" author="&author;" version="&version;" pluginURL="https://raw.githubusercontent.com/&githubRepo;/main/msf.plg" launch="Settings/&name;" support="https://github.com/&githubRepo;/issues" icon="network-wired" min="6.12.0">
   <CHANGES>
