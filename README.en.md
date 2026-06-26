@@ -21,6 +21,12 @@ Current release: `v0.3.6`
 - Local upload installation for MosDNS, Mihomo, and Zashboard when online downloads are difficult.
 - Linux tarball/systemd, fnOS FPK, and Unraid PLG are supported. Docker host-network deployment is currently experimental.
 
+## Architecture Diagram
+
+<p align="center">
+  <img src="docs/png/framework-architecture.svg" alt="msf side-router proxy architecture diagram">
+</p>
+
 ## Platform Support
 
 | Platform | Status | Install docs | Update / removal |

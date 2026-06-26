@@ -21,6 +21,12 @@
 - 支持 MosDNS、Mihomo、Zashboard 本地上传安装，网络困难时可用预下载核心离线安装。
 - 支持 Linux tarball/systemd、fnOS FPK、Unraid PLG；Docker host network 当前为实验部署。
 
+## 架构原理图
+
+<p align="center">
+  <img src="docs/png/framework-architecture.svg" alt="msf 旁路由代理实现原理图">
+</p>
+
 ## 平台支持
 
 | 平台 | 状态 | 安装文档 | 更新/卸载方式 |
