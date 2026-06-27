@@ -21,7 +21,8 @@
 - 支持机场订阅、手动节点、MosDNS 客户端代理模式、Mihomo 节点/规则/连接/日志/配置页面。
 - 支持 Mihomo 自定义配置、CodeMirror YAML 编辑器、组件更新检查、自动下载、更新通知和升级方式配置。
 - 支持 MosDNS、Mihomo、Zashboard 本地上传安装，网络困难时可用预下载核心离线安装。
-- 支持 Linux tarball/systemd、fnOS FPK、Unraid PLG；Docker host network 当前为实验部署。
+- 支持 Linux tarball/systemd、fnOS FPK、Unraid PLG；Docker TUN host/macvlan 当前为实验部署。
+- Docker 部署必须把宿主机数据目录映射到容器 `/opt/msf`，默认示例使用 `./msf-data:/opt/msf`。
 
 ## 架构原理图
 
@@ -36,7 +37,7 @@
 | Linux tarball/systemd | 稳定支持 | [Linux 安装](docs/install/linux.md) | `msf update` / `msf uninstall` |
 | fnOS FPK | 支持 | [fnOS FPK 安装](docs/install/fnos-fpk.md) | fnOS / 飞牛应用中心或 FPK 包管理器 |
 | Unraid PLG | 稳定支持 | [Unraid PLG 安装](docs/install/unraid-plg.md) | Unraid 插件管理页面 |
-| Docker host network | 实验性，未完全完成 | [Docker 实验部署](docs/docker.md) | Docker / Compose / 容器管理器 |
+| Docker TUN host/macvlan | 实验性，未完全完成 | [Docker 实验部署](docs/docker.md) | Docker / Compose / 容器管理器 |
 
 `msf update` 和 `msf uninstall` 只面向 Linux tarball/systemd 安装。fnOS FPK、Unraid PLG、Docker 请通过各自平台管理器更新或卸载，避免绕过包状态。
 

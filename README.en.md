@@ -21,7 +21,8 @@ Current release: `v0.3.6`
 - Airport subscriptions, manual nodes, MosDNS client proxy modes, and Mihomo node/rule/connection/log/config pages.
 - Mihomo custom configs, CodeMirror YAML editing, component update checks, automatic downloads, update notices, and configurable upgrade behavior.
 - Local upload installation for MosDNS, Mihomo, and Zashboard when online downloads are difficult.
-- Linux tarball/systemd, fnOS FPK, and Unraid PLG are supported. Docker host-network deployment is currently experimental.
+- Linux tarball/systemd, fnOS FPK, and Unraid PLG are supported. Docker TUN host/macvlan deployment is currently experimental.
+- Docker deployments must mount a host data directory to container `/opt/msf`; the default examples use `./msf-data:/opt/msf`.
 
 ## Architecture Diagram
 
@@ -36,7 +37,7 @@ Current release: `v0.3.6`
 | Linux tarball/systemd | Stable | [Linux install](docs/install/linux.md) | `msf update` / `msf uninstall` |
 | fnOS FPK | Supported | [fnOS FPK install](docs/install/fnos-fpk.md) | fnOS / Feiniu App Center or FPK package manager |
 | Unraid PLG | Stable | [Unraid PLG install](docs/install/unraid-plg.md) | Unraid plugin manager |
-| Docker host network | Experimental, not complete | [Docker experimental deployment](docs/docker.md) | Docker / Compose / container manager |
+| Docker TUN host/macvlan | Experimental, not complete | [Docker experimental deployment](docs/docker.en.md) | Docker / Compose / container manager |
 
 `msf update` and `msf uninstall` are only for Linux tarball/systemd installs. fnOS FPK, Unraid PLG, and Docker installs must be updated or removed through their platform manager.
 
