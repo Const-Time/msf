@@ -291,6 +291,76 @@ docker stop msf
 docker rm msf
 ```
 
+## Troubleshooting
+
+### LXC / Proxmox reports missing `/dev/net/tun`
+
+If deployment fails with:
+
+```text
+error gathering device information while adding custom device "/dev/net/tun": no such file or directory
+```
+
+the runtime that hosts the Docker daemon does not expose `/dev/net/tun`. If Docker runs inside an LXC container, check inside that LXC container:
+
+```bash
+ls -l /dev/net/tun
+cat /dev/net/tun
+```
+
+Normally, `cat /dev/net/tun` should return something like `File descriptor in bad state`. If the file does not exist, load and pass through TUN from the outer host. For Proxmox LXC, a typical configuration is:
+
+```bash
+modprobe tun
+```
+
+```text
+features: nesting=1
+lxc.cgroup2.devices.allow: c 10:200 rwm
+lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
+```
+
+Restart the LXC container after changing its config. LXC permission models differ by platform, so use a privileged LXC or a VM if the platform cannot expose TUN reliably.
+
+### macvlan reports `invalid subinterface vlan name`
+
+If deployment fails with a message like:
+
+```text
+invalid subinterface vlan name MSF_DOCKER_PARENT_IFACE:eth0, example formatting is eth0.10
+```
+
+Docker received an invalid macvlan `parent`. The `parent` must be a real interface in the Docker host environment, such as `eth0`, `ens18`, `br0`, or a VLAN subinterface like `eth0.10`.
+
+The `.env` file must use equals-sign syntax:
+
+```text
+MSF_DOCKER_PARENT_IFACE=eth0
+```
+
+Do not write:
+
+```text
+MSF_DOCKER_PARENT_IFACE:eth0
+```
+
+In a Portainer Stack, set `MSF_DOCKER_PARENT_IFACE` as the environment variable name and `eth0` as its value. Do not enter `MSF_DOCKER_PARENT_IFACE:eth0` as one complete value. Verify the rendered compose config before deploying:
+
+```bash
+MSF_DOCKER_PARENT_IFACE=eth0 \
+MSF_DOCKER_SUBNET=192.168.1.0/24 \
+MSF_DOCKER_GATEWAY=192.168.1.1 \
+MSF_DOCKER_IPV4_ADDRESS=192.168.1.10 \
+docker compose -f docker-compose.macvlan.yml config
+```
+
+The output should contain:
+
+```yaml
+driver_opts:
+  parent: eth0
+```
+
 ## Update and Removal
 
 `msf update` and WebUI self-update installation are disabled inside Docker containers. Upgrade the image by pulling the new image and recreating the container.

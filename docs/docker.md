@@ -291,6 +291,76 @@ docker stop msf
 docker rm msf
 ```
 
+## 常见问题
+
+### LXC / Proxmox 提示 `/dev/net/tun` 不存在
+
+如果部署时报错：
+
+```text
+error gathering device information while adding custom device "/dev/net/tun": no such file or directory
+```
+
+说明 Docker daemon 所在的运行环境没有 `/dev/net/tun`。如果 Docker 跑在 LXC 里，需要在 LXC 容器内检查：
+
+```bash
+ls -l /dev/net/tun
+cat /dev/net/tun
+```
+
+正常情况下，`cat /dev/net/tun` 应返回类似 `File descriptor in bad state`。如果文件不存在，需要在外层宿主机加载并透传 TUN，例如 Proxmox LXC 可参考：
+
+```bash
+modprobe tun
+```
+
+```text
+features: nesting=1
+lxc.cgroup2.devices.allow: c 10:200 rwm
+lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
+```
+
+修改 LXC 配置后重启容器。不同平台的 LXC 权限模型不完全一样，必要时请使用 privileged LXC 或 VM 测试。
+
+### macvlan 提示 `invalid subinterface vlan name`
+
+如果部署时报错类似：
+
+```text
+invalid subinterface vlan name MSF_DOCKER_PARENT_IFACE:eth0, example formatting is eth0.10
+```
+
+说明 Docker 收到的 macvlan `parent` 不是实际网卡名。`parent` 必须是 Docker 所在宿主环境中的真实接口，例如 `eth0`、`ens18`、`br0` 或 VLAN 子接口 `eth0.10`。
+
+`.env` 文件必须使用等号写法：
+
+```text
+MSF_DOCKER_PARENT_IFACE=eth0
+```
+
+不要写成：
+
+```text
+MSF_DOCKER_PARENT_IFACE:eth0
+```
+
+在 Portainer Stack 里，请把 `MSF_DOCKER_PARENT_IFACE` 作为环境变量名、`eth0` 作为值填写，不要把 `MSF_DOCKER_PARENT_IFACE:eth0` 当成一个完整值。可以先用下面命令确认 compose 展开结果：
+
+```bash
+MSF_DOCKER_PARENT_IFACE=eth0 \
+MSF_DOCKER_SUBNET=192.168.1.0/24 \
+MSF_DOCKER_GATEWAY=192.168.1.1 \
+MSF_DOCKER_IPV4_ADDRESS=192.168.1.10 \
+docker compose -f docker-compose.macvlan.yml config
+```
+
+输出中应能看到：
+
+```yaml
+driver_opts:
+  parent: eth0
+```
+
 ## 更新和卸载
 
 Docker 容器内禁用 `msf update` 和 WebUI 自更新安装。镜像升级应通过拉取新镜像并重建容器完成。
