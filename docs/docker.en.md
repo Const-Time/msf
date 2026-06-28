@@ -18,8 +18,8 @@ This experimental image is not pushed as `latest`. To pull or deploy the Docker 
 
 - Docker defaults to Mihomo TUN and no longer asks MSF to write host nftables or policy routing rules.
 - Two container network modes are supported: `host-tun` and `macvlan-tun`.
-- `host-tun` is the default entry point and is suitable for regular Linux Docker hosts.
-- `macvlan-tun` gives the container its own LAN IPv4 address and is suitable for Unraid Dockerman, `br0`, and custom network scenarios.
+- `host-tun` shares the Docker host network namespace. It is suitable for testing, host-local proxying, or side-router deployments where you can configure router static routes and host forwarding.
+- `macvlan-tun` gives the container its own LAN IPv4 address and is suitable for Unraid Dockerman, `br0`, and custom network scenarios. It is currently the preferred Docker gateway mode.
 - Runtime data must be mapped to a host directory. The in-container data directory is fixed at `/opt/msf`; the default examples map host `./msf-data` to `/opt/msf`.
 - `msf update` and WebUI self-update installation are disabled inside the container. Image upgrades must be handled through Docker, Compose, or your container manager.
 
@@ -45,7 +45,7 @@ MSF_DOCKER_NETWORK_MODE=host-tun
 MSF_DOCKER_CLEANUP_NETWORK_ON_EXIT=false
 ```
 
-In Docker TUN mode, the generated Mihomo config enables `tun.auto-route`, `tun.auto-detect-interface`, and `tun.route-address`, explicitly keeps `tun.dns-hijack=[]` and `tun.auto-redirect=false`, and sets `dns.proxy-server-nameserver`. MosDNS remains responsible for DNS splitting, while Mihomo only takes over Fake-IP and required public targets. This means MSF does not write host `table inet msf`, `fwmark 1 table 100`, `ip rule`, or `ip route` entries.
+In Docker TUN mode, the generated Mihomo config enables `tun.auto-route`, `tun.auto-detect-interface`, and `tun.route-address`, explicitly keeps `tun.dns-hijack=[]` and `tun.auto-redirect=false`, and sets `dns.proxy-server-nameserver`. MosDNS remains responsible for DNS splitting, while Mihomo only takes over Fake-IP and required public targets. This means MSF does not write host `table inet msf`, `fwmark 1 table 100`, or `ip rule` entries. If you use `host-tun` as a side-router gateway, add the host FakeIP route described below.
 
 The data directory must be persisted:
 
@@ -267,6 +267,108 @@ Default FakeIP ranges:
 | IPv6 | `f2b0::/18` |
 
 The first macvlan version only targets IPv4 access. See [Router integration overview](guide/en/router-integration.md) for the full router-side guide.
+
+### Persistent host-tun FakeIP Route
+
+`host-tun` shares the Docker host network namespace. After the router points `28.0.0.0/8` to the Docker host, the host must also send the full FakeIP range to the Mihomo TUN interface. In some environments, Mihomo only creates `28.0.0.0/30` on the `mihomo` interface, which only covers `28.0.0.0` through `28.0.0.3`; client FakeIP targets such as `28.0.0.13` will not enter the TUN interface.
+
+First verify the workaround on the Docker host:
+
+```bash
+sudo ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1
+
+IFACE="$(ip -4 route show default | awk '/default/ {print $5; exit}')"
+echo 0 | sudo tee "/proc/sys/net/ipv4/conf/$IFACE/rp_filter" >/dev/null
+
+sudo sh -c '
+if systemctl is-active --quiet firewalld 2>/dev/null; then
+  systemctl restart firewalld
+elif systemctl is-active --quiet nftables 2>/dev/null; then
+  systemctl restart nftables
+elif command -v ufw >/dev/null 2>&1; then
+  ufw reload
+else
+  echo "no firewalld/nftables/ufw service detected, skipped"
+fi
+'
+```
+
+Confirm that FakeIP traffic uses `mihomo`:
+
+```bash
+ip route get 28.0.0.13
+cat "/proc/sys/net/ipv4/conf/$IFACE/rp_filter"
+```
+
+Expected output:
+
+```text
+28.0.0.13 dev mihomo src 28.0.0.1
+0
+```
+
+The temporary route can disappear after the container, Mihomo, or host restarts. To keep it persistent, create a systemd timer on the Docker host. It periodically checks whether the `mihomo` interface exists, then restores the FakeIP route and disables `rp_filter` on the default egress interface:
+
+```bash
+sudo tee /usr/local/sbin/msf-host-tun-route >/dev/null <<'EOF'
+#!/bin/sh
+set -eu
+
+ip link show mihomo >/dev/null 2>&1 || exit 0
+
+IFACE="$(ip -4 route show default | awk '/default/ {print $5; exit}')"
+ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1
+
+if [ -n "$IFACE" ] && [ -w "/proc/sys/net/ipv4/conf/$IFACE/rp_filter" ]; then
+  echo 0 > "/proc/sys/net/ipv4/conf/$IFACE/rp_filter"
+fi
+EOF
+
+sudo chmod +x /usr/local/sbin/msf-host-tun-route
+
+sudo tee /etc/systemd/system/msf-host-tun-route.service >/dev/null <<'EOF'
+[Unit]
+Description=Apply MSF Docker host-tun FakeIP route
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/msf-host-tun-route
+EOF
+
+sudo tee /etc/systemd/system/msf-host-tun-route.timer >/dev/null <<'EOF'
+[Unit]
+Description=Refresh MSF Docker host-tun FakeIP route
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=msf-host-tun-route.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now msf-host-tun-route.timer
+sudo systemctl start msf-host-tun-route.service
+```
+
+Guardrail: if your firewall service caches or replays forwarding rules, restart the active firewall service after installing the persistent workaround:
+
+```bash
+sudo sh -c '
+if systemctl is-active --quiet firewalld 2>/dev/null; then
+  systemctl restart firewalld
+elif systemctl is-active --quiet nftables 2>/dev/null; then
+  systemctl restart nftables
+elif command -v ufw >/dev/null 2>&1; then
+  ufw reload
+else
+  echo "no firewalld/nftables/ufw service detected, skipped"
+fi
+'
+```
 
 ## Script Variables
 

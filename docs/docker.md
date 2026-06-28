@@ -18,8 +18,8 @@ ghcr.io/scoltzero/msf:v0.3.8
 
 - Docker 版默认使用 Mihomo TUN，不再由 MSF 写入宿主机 nftables 或 policy routing。
 - 支持两种容器网络：`host-tun` 和 `macvlan-tun`。
-- `host-tun` 是默认入口，适合普通 Linux Docker 主机。
-- `macvlan-tun` 让容器拥有独立 LAN IPv4，适合 Unraid Dockerman / br0 / 自定义网络场景。
+- `host-tun` 使用 Docker 宿主机网络命名空间，适合测试、宿主机自身代理，或已经能配置主路由静态路由和宿主机转发的旁路由环境。
+- `macvlan-tun` 让容器拥有独立 LAN IPv4，适合 Unraid Dockerman / br0 / 自定义网络场景，也是当前 Docker 网关部署更推荐的方式。
 - 运行数据必须映射到宿主机目录；容器内数据目录固定为 `/opt/msf`，默认示例映射到宿主机 `./msf-data`。
 - 容器内禁用 `msf update` 和 WebUI 自更新安装；镜像升级必须通过 Docker / Compose / 容器管理器完成。
 
@@ -45,7 +45,7 @@ MSF_DOCKER_NETWORK_MODE=host-tun
 MSF_DOCKER_CLEANUP_NETWORK_ON_EXIT=false
 ```
 
-Docker TUN 模式下，Mihomo 配置会启用 `tun.auto-route`、`tun.auto-detect-interface` 和 `tun.route-address`，显式保持 `tun.dns-hijack=[]`、`tun.auto-redirect=false`，并配置 `dns.proxy-server-nameserver`。DNS 分流仍由 MosDNS 负责，Mihomo 只接管 Fake-IP 和必要公网目标。这意味着 MSF 不会写宿主机 `table inet msf`、`fwmark 1 table 100`、`ip rule` 或 `ip route`。
+Docker TUN 模式下，Mihomo 配置会启用 `tun.auto-route`、`tun.auto-detect-interface` 和 `tun.route-address`，显式保持 `tun.dns-hijack=[]`、`tun.auto-redirect=false`，并配置 `dns.proxy-server-nameserver`。DNS 分流仍由 MosDNS 负责，Mihomo 只接管 Fake-IP 和必要公网目标。这意味着 MSF 不会写宿主机 `table inet msf`、`fwmark 1 table 100` 或 `ip rule`。如果你把 `host-tun` 当作旁路网关使用，还需要按下文补充宿主机 FakeIP 路由。
 
 数据目录必须持久化映射：
 
@@ -267,6 +267,108 @@ MSF 地址按网络模式选择：
 | IPv6 | `f2b0::/18` |
 
 macvlan 首版只承诺 IPv4 接入。完整教程见 [路由器接入总览](guide/zh/router-integration.md)。
+
+### host-tun FakeIP 路由持久化
+
+`host-tun` 共享 Docker 宿主机网络命名空间。主路由把 `28.0.0.0/8` 静态路由指向 Docker 宿主机后，宿主机还必须把完整 FakeIP 网段交给 Mihomo TUN。部分环境里 Mihomo 只会给 `mihomo` 接口生成 `28.0.0.0/30`，这只能覆盖 `28.0.0.0` 到 `28.0.0.3`，客户端拿到 `28.0.0.13` 这类 FakeIP 时就不会进入 TUN。
+
+先在 Docker 宿主机上临时验证：
+
+```bash
+sudo ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1
+
+IFACE="$(ip -4 route show default | awk '/default/ {print $5; exit}')"
+echo 0 | sudo tee "/proc/sys/net/ipv4/conf/$IFACE/rp_filter" >/dev/null
+
+sudo sh -c '
+if systemctl is-active --quiet firewalld 2>/dev/null; then
+  systemctl restart firewalld
+elif systemctl is-active --quiet nftables 2>/dev/null; then
+  systemctl restart nftables
+elif command -v ufw >/dev/null 2>&1; then
+  ufw reload
+else
+  echo "no firewalld/nftables/ufw service detected, skipped"
+fi
+'
+```
+
+确认 FakeIP 已经走 `mihomo`：
+
+```bash
+ip route get 28.0.0.13
+cat "/proc/sys/net/ipv4/conf/$IFACE/rp_filter"
+```
+
+期望看到：
+
+```text
+28.0.0.13 dev mihomo src 28.0.0.1
+0
+```
+
+临时命令在容器、Mihomo 或宿主机重启后可能丢失。需要持久化时，在 Docker 宿主机上创建 systemd 定时任务。它会定期检查 `mihomo` 接口是否存在，存在时补齐 FakeIP 路由并关闭出口网卡 `rp_filter`：
+
+```bash
+sudo tee /usr/local/sbin/msf-host-tun-route >/dev/null <<'EOF'
+#!/bin/sh
+set -eu
+
+ip link show mihomo >/dev/null 2>&1 || exit 0
+
+IFACE="$(ip -4 route show default | awk '/default/ {print $5; exit}')"
+ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1
+
+if [ -n "$IFACE" ] && [ -w "/proc/sys/net/ipv4/conf/$IFACE/rp_filter" ]; then
+  echo 0 > "/proc/sys/net/ipv4/conf/$IFACE/rp_filter"
+fi
+EOF
+
+sudo chmod +x /usr/local/sbin/msf-host-tun-route
+
+sudo tee /etc/systemd/system/msf-host-tun-route.service >/dev/null <<'EOF'
+[Unit]
+Description=Apply MSF Docker host-tun FakeIP route
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/msf-host-tun-route
+EOF
+
+sudo tee /etc/systemd/system/msf-host-tun-route.timer >/dev/null <<'EOF'
+[Unit]
+Description=Refresh MSF Docker host-tun FakeIP route
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=msf-host-tun-route.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now msf-host-tun-route.timer
+sudo systemctl start msf-host-tun-route.service
+```
+
+防呆：如果你的系统防火墙服务会缓存或重放转发规则，安装持久化任务后手动重启当前正在使用的防火墙服务：
+
+```bash
+sudo sh -c '
+if systemctl is-active --quiet firewalld 2>/dev/null; then
+  systemctl restart firewalld
+elif systemctl is-active --quiet nftables 2>/dev/null; then
+  systemctl restart nftables
+elif command -v ufw >/dev/null 2>&1; then
+  ufw reload
+else
+  echo "no firewalld/nftables/ufw service detected, skipped"
+fi
+'
+```
 
 ## 脚本变量
 

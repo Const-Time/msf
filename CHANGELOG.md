@@ -16,6 +16,7 @@
 - TUN 模式新增 `dns.proxy-server-nameserver`，避免节点服务器域名被 Fake-IP 污染后解析成 `28.0.0.x` 导致拨号失败。
 - TUN 模式新增 `route-exclude-address` 默认排除 loopback、LAN、link-local、ULA 和常见国内 DNS。
 - 修复已初始化的 v0.3.7 Docker TUN 生成配置升级后仍保留旧 TUN / DNS block 的问题；生成配置模式会在启动期自动修正，自定义 Mihomo 配置不会被自动覆盖。
+- 补充 Docker `host-tun` 网关部署的 FakeIP 路由说明：如果宿主机只生成 `28.0.0.0/30 dev mihomo`，需要额外把 `28.0.0.0/8` 路由到 `mihomo`，并关闭出口网卡 `rp_filter`。Docker 文档已加入临时验证命令、systemd 持久化方案和防火墙重启防呆命令。
 
 ### English
 
@@ -31,6 +32,7 @@
 - Added `dns.proxy-server-nameserver` in TUN mode so proxy server domains are not resolved into Fake-IP addresses such as `28.0.0.x`.
 - Added default `route-exclude-address` entries for loopback, LAN, link-local, ULA, and common China DNS addresses.
 - Fixed already-initialized v0.3.7 Docker TUN generated configs keeping the old TUN / DNS blocks after upgrade; generated config mode is repaired at startup, while custom Mihomo config is not overwritten.
+- Documented the Docker `host-tun` gateway FakeIP route workaround: if the host only creates `28.0.0.0/30 dev mihomo`, route the full `28.0.0.0/8` range to `mihomo` and disable `rp_filter` on the egress interface. The Docker docs now include temporary verification commands, a systemd persistence setup, and a firewall restart guardrail.
 
 ## v0.3.7 - 2026-06-27
 
