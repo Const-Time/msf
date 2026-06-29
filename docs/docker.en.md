@@ -272,6 +272,8 @@ The first macvlan version only targets IPv4 access. See [Router integration over
 
 `host-tun` shares the Docker host network namespace. After the router points `28.0.0.0/8` to the Docker host, the host must also send the full FakeIP range to the Mihomo TUN interface. In some environments, Mihomo only creates `28.0.0.0/30` on the `mihomo` interface, which only covers `28.0.0.0` through `28.0.0.3`; client FakeIP targets such as `28.0.0.13` will not enter the TUN interface.
 
+Newer builds automatically restore the FakeIP IPv4 route after Mihomo starts when Docker `host-tun` and Mihomo TUN mode are active, and they also try to disable `rp_filter` on the default egress interface. If `/proc/sys` is read-only, your firewall service replays routing rules, or you are troubleshooting an older build, keep the manual commands below as a fallback. MSF does not automatically restart `firewalld`, `nftables`, or `ufw`.
+
 First verify the workaround on the Docker host:
 
 ```bash

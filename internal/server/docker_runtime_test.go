@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -319,6 +321,125 @@ func TestDockerTunPreflightSkipsTProxyRedirectPorts(t *testing.T) {
 	}
 }
 
+func TestDockerHostTunRouteFixAppliesFakeIPRoute(t *testing.T) {
+	t.Setenv("MSF_RUNTIME", "docker")
+	t.Setenv("MSF_DOCKER_NETWORK_MODE", "host-tun")
+	app := newTestApp(t)
+	initializeDockerRouteFixSetup(t, app, "tun")
+
+	var commands []string
+	stubDockerHostTunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		cmd := strings.Join(append([]string{name}, args...), " ")
+		commands = append(commands, cmd)
+		switch {
+		case cmd == "ip link show mihomo":
+			return nil, nil
+		case cmd == "ip -4 route show default":
+			return []byte("default via 10.10.10.2 dev ens18 proto dhcp src 10.10.10.12 metric 1002\n"), nil
+		default:
+			return nil, nil
+		}
+	})
+
+	app.applyDockerHostTunRouteFixWithWait(0)
+
+	joined := strings.Join(commands, "\n")
+	for _, want := range []string{
+		"ip link show mihomo",
+		"ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1",
+		"ip -4 route show default",
+		`sh -c printf 0 > "$1" sh /proc/sys/net/ipv4/conf/ens18/rp_filter`,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("host-tun route fix commands missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestDockerHostTunRouteFixSkipsOtherModes(t *testing.T) {
+	tests := []struct {
+		name      string
+		runtime   string
+		network   string
+		proxyMode string
+	}{
+		{name: "macvlan tun", runtime: "docker", network: "macvlan-tun", proxyMode: "tun"},
+		{name: "native tun", runtime: "native", network: "host-tun", proxyMode: "tun"},
+		{name: "docker nft", runtime: "docker", network: "host-tun", proxyMode: "nft"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MSF_RUNTIME", tt.runtime)
+			t.Setenv("MSF_DOCKER_NETWORK_MODE", tt.network)
+			app := newTestApp(t)
+			initializeDockerRouteFixSetup(t, app, tt.proxyMode)
+
+			var commands []string
+			stubDockerHostTunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+				commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+				return nil, nil
+			})
+
+			app.applyDockerHostTunRouteFixWithWait(0)
+			if len(commands) != 0 {
+				t.Fatalf("route fix should not run for %s, got commands:\n%s", tt.name, strings.Join(commands, "\n"))
+			}
+		})
+	}
+}
+
+func TestDockerHostTunRouteFixToleratesCommandFailures(t *testing.T) {
+	t.Run("missing mihomo interface", func(t *testing.T) {
+		t.Setenv("MSF_RUNTIME", "docker")
+		t.Setenv("MSF_DOCKER_NETWORK_MODE", "host-tun")
+		app := newTestApp(t)
+		initializeDockerRouteFixSetup(t, app, "tun")
+
+		var commands []string
+		stubDockerHostTunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+			return []byte("Device mihomo does not exist"), errors.New("missing interface")
+		})
+
+		app.applyDockerHostTunRouteFixWithWait(0)
+		if got := strings.Join(commands, "\n"); got != "ip link show mihomo" {
+			t.Fatalf("missing interface should only probe link, got:\n%s", got)
+		}
+	})
+
+	t.Run("rp_filter read only", func(t *testing.T) {
+		t.Setenv("MSF_RUNTIME", "docker")
+		t.Setenv("MSF_DOCKER_NETWORK_MODE", "host-tun")
+		app := newTestApp(t)
+		initializeDockerRouteFixSetup(t, app, "tun")
+
+		var commands []string
+		stubDockerHostTunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			cmd := strings.Join(append([]string{name}, args...), " ")
+			commands = append(commands, cmd)
+			switch {
+			case cmd == "ip link show mihomo":
+				return nil, nil
+			case cmd == "ip -4 route show default":
+				return []byte("default via 10.10.10.2 dev ens18 proto dhcp src 10.10.10.12\n"), nil
+			case strings.HasPrefix(cmd, "sh -c"):
+				return []byte("Read-only file system"), errors.New("read only")
+			default:
+				return nil, nil
+			}
+		})
+
+		app.applyDockerHostTunRouteFixWithWait(0)
+		joined := strings.Join(commands, "\n")
+		if !strings.Contains(joined, "ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1") {
+			t.Fatalf("route should still be applied before rp_filter failure:\n%s", joined)
+		}
+		if !strings.Contains(joined, "/proc/sys/net/ipv4/conf/ens18/rp_filter") {
+			t.Fatalf("rp_filter update should be attempted:\n%s", joined)
+		}
+	})
+}
+
 func TestDockerRuntimeDisablesSelfUpdateAPI(t *testing.T) {
 	t.Setenv("MSF_RUNTIME", "docker")
 	app := newTestApp(t)
@@ -426,6 +547,36 @@ func stringSliceContainsAny(value any, want string) bool {
 		}
 	}
 	return false
+}
+
+func initializeDockerRouteFixSetup(t *testing.T, app *App, proxyMode string) {
+	t.Helper()
+	body := map[string]any{
+		"username":           "root",
+		"password":           "test-password-123",
+		"confirmPassword":    "test-password-123",
+		"webPort":            "17777",
+		"selected_interface": "eth0",
+		"proxyCore":          "mihomo",
+		"mosdnsEnabled":      true,
+		"mihomo_core_type":   "meta",
+		"linux_proxy_mode":   proxyMode,
+		"enableIPv6":         false,
+		"auto_set_dns":       true,
+	}
+	res := requestJSON(t, app, http.MethodPost, "/api/v1/setup/initialize", "", body)
+	if res.Code != http.StatusOK {
+		t.Fatalf("initialize status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func stubDockerHostTunCommand(t *testing.T, runner func(context.Context, string, ...string) ([]byte, error)) {
+	t.Helper()
+	previous := dockerHostTunCommand
+	dockerHostTunCommand = runner
+	t.Cleanup(func() {
+		dockerHostTunCommand = previous
+	})
 }
 
 func assertValidYAML(t *testing.T, content []byte) {

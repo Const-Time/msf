@@ -272,6 +272,8 @@ macvlan 首版只承诺 IPv4 接入。完整教程见 [路由器接入总览](gu
 
 `host-tun` 共享 Docker 宿主机网络命名空间。主路由把 `28.0.0.0/8` 静态路由指向 Docker 宿主机后，宿主机还必须把完整 FakeIP 网段交给 Mihomo TUN。部分环境里 Mihomo 只会给 `mihomo` 接口生成 `28.0.0.0/30`，这只能覆盖 `28.0.0.0` 到 `28.0.0.3`，客户端拿到 `28.0.0.13` 这类 FakeIP 时就不会进入 TUN。
 
+新版本会在 Docker `host-tun` + Mihomo TUN 模式下，在 Mihomo 启动成功后自动补齐这条 FakeIP IPv4 路由，并尝试关闭默认出口网卡的 `rp_filter`。如果宿主机 `/proc/sys` 只读、系统防火墙重放了路由规则，或你正在排查旧版本问题，可以继续使用下面的手工命令作为 fallback。程序不会自动重启 `firewalld`、`nftables` 或 `ufw`。
+
 先在 Docker 宿主机上临时验证：
 
 ```bash
