@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
+	"net/netip"
 	"os/exec"
 	"strings"
 	"time"
@@ -43,12 +43,6 @@ func (a *App) applyDockerHostTunRouteFixWithWait(wait time.Duration) {
 		return
 	}
 	cfg.defaults()
-	cidr := fakeIPv4RouteCIDR(cfg.FakeIPRangeV4)
-	src, ok := fakeIPv4RouteSource(cidr)
-	if !ok {
-		log.Printf("warning: docker host-tun route fix skipped: invalid fake-ip IPv4 range %q", cfg.FakeIPRangeV4)
-		return
-	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), dockerHostTunCommandTimeout+wait)
 	defer cancel()
@@ -57,9 +51,10 @@ func (a *App) applyDockerHostTunRouteFixWithWait(wait time.Duration) {
 		log.Printf("warning: docker host-tun route fix skipped: interface %s is not ready; see docs/docker.md for manual fallback", dockerHostTunInterface)
 		return
 	}
-	if out, err := dockerHostTunCommand(ctx, "ip", "route", "replace", cidr, "dev", dockerHostTunInterface, "src", src); err != nil {
-		log.Printf("warning: docker host-tun route fix failed to replace FakeIP route: %v: %s", err, strings.TrimSpace(string(out)))
-		return
+
+	a.applyDockerHostTunIPv4Route(ctx, cfg)
+	if cfg.EnableIPv6 {
+		a.applyDockerHostTunIPv6Route(ctx, cfg)
 	}
 
 	iface, err := dockerHostTunDefaultInterface(ctx)
@@ -87,6 +82,34 @@ func (a *App) shouldApplyDockerHostTunRouteFix() bool {
 	}
 	cfg.defaults()
 	return strings.EqualFold(cfg.ProxyCore, "mihomo") && isTUNProxyMode(cfg.LinuxProxyMode)
+}
+
+func (a *App) applyDockerHostTunIPv4Route(ctx context.Context, cfg SetupConfig) {
+	cidr := fakeIPv4RouteCIDR(cfg.FakeIPRangeV4)
+	src, ok := fakeIPRouteSource(cidr)
+	if !ok {
+		log.Printf("warning: docker host-tun route fix skipped IPv4 route: invalid fake-ip IPv4 range %q", cfg.FakeIPRangeV4)
+		return
+	}
+	if out, err := dockerHostTunCommand(ctx, "ip", "route", "replace", cidr, "dev", dockerHostTunInterface, "src", src); err != nil {
+		log.Printf("warning: docker host-tun route fix failed to replace IPv4 FakeIP route: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+}
+
+func (a *App) applyDockerHostTunIPv6Route(ctx context.Context, cfg SetupConfig) {
+	cidr, ok := strictFakeIPv6RouteCIDR(cfg.FakeIPRangeV6)
+	if !ok {
+		log.Printf("warning: docker host-tun route fix skipped IPv6 route: invalid fake-ip IPv6 range %q", cfg.FakeIPRangeV6)
+		return
+	}
+	src, ok := fakeIPRouteSource(cidr)
+	if !ok {
+		log.Printf("warning: docker host-tun route fix skipped IPv6 route: invalid fake-ip IPv6 route %q", cidr)
+		return
+	}
+	if out, err := dockerHostTunCommand(ctx, "ip", "-6", "route", "replace", cidr, "dev", dockerHostTunInterface, "src", src); err != nil {
+		log.Printf("warning: docker host-tun route fix failed to replace IPv6 FakeIP route: %v: %s", err, strings.TrimSpace(string(out)))
+	}
 }
 
 func waitForDockerHostTunInterface(ctx context.Context, wait time.Duration) bool {
@@ -126,21 +149,29 @@ func parseDockerHostTunDefaultInterface(output string) string {
 	return ""
 }
 
-func fakeIPv4RouteSource(cidr string) (string, bool) {
-	_, ipNet, err := net.ParseCIDR(strings.TrimSpace(cidr))
+func strictFakeIPv6RouteCIDR(v string) (string, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		v = "f2b0::/18"
+	}
+	if p, err := netip.ParsePrefix(v); err == nil && p.Addr().Is6() {
+		return p.Masked().String(), true
+	}
+	if addr, err := netip.ParseAddr(v); err == nil && addr.Is6() {
+		return netip.PrefixFrom(addr, 64).Masked().String(), true
+	}
+	return "", false
+}
+
+func fakeIPRouteSource(cidr string) (string, bool) {
+	prefix, err := netip.ParsePrefix(strings.TrimSpace(cidr))
 	if err != nil {
 		return "", false
 	}
-	ip := ipNet.IP.To4()
-	if ip == nil {
+	addr := prefix.Masked().Addr()
+	src := addr.Next()
+	if !src.IsValid() || !prefix.Contains(src) {
 		return "", false
 	}
-	src := append(net.IP(nil), ip...)
-	for i := len(src) - 1; i >= 0; i-- {
-		src[i]++
-		if src[i] != 0 {
-			return src.String(), true
-		}
-	}
-	return "", false
+	return src.String(), true
 }

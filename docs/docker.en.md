@@ -257,7 +257,7 @@ Choose the MSF address by Docker mode:
 | Docker mode | Router should point to |
 |---|---|
 | `host-tun` | Docker host LAN IP |
-| `macvlan-tun` | Container dedicated LAN IPv4 |
+| `macvlan-tun` | Container dedicated LAN IPv4; a routable container IPv6 is also required when IPv6 is enabled |
 
 Default FakeIP ranges:
 
@@ -266,18 +266,20 @@ Default FakeIP ranges:
 | IPv4 | `28.0.0.0/8` |
 | IPv6 | `f2b0::/18` |
 
-The first macvlan version only targets IPv4 access. See [Router integration overview](guide/en/router-integration.md) for the full router-side guide.
+The default macvlan acceptance path is still IPv4-first. If IPv6 is enabled, the container must have a router-reachable IPv6 address and the main router must point `f2b0::/18` to that container IPv6. See [Router integration overview](guide/en/router-integration.md) for the full router-side guide.
 
 ### Persistent host-tun FakeIP Route
 
-`host-tun` shares the Docker host network namespace. After the router points `28.0.0.0/8` to the Docker host, the host must also send the full FakeIP range to the Mihomo TUN interface. In some environments, Mihomo only creates `28.0.0.0/30` on the `mihomo` interface, which only covers `28.0.0.0` through `28.0.0.3`; client FakeIP targets such as `28.0.0.13` will not enter the TUN interface.
+`host-tun` shares the Docker host network namespace. After the router points `28.0.0.0/8` to the Docker host, the host must also send the full IPv4 FakeIP range to the Mihomo TUN interface; when IPv6 is enabled, `f2b0::/18` must also point to the Mihomo TUN interface. In some environments, Mihomo only creates `28.0.0.0/30` on the `mihomo` interface, which only covers `28.0.0.0` through `28.0.0.3`; client FakeIP targets such as `28.0.0.13` will not enter the TUN interface.
 
-Newer builds automatically restore the FakeIP IPv4 route after Mihomo starts when Docker `host-tun` and Mihomo TUN mode are active, and they also try to disable `rp_filter` on the default egress interface. If `/proc/sys` is read-only, your firewall service replays routing rules, or you are troubleshooting an older build, keep the manual commands below as a fallback. MSF does not automatically restart `firewalld`, `nftables`, or `ufw`.
+Newer builds automatically restore the FakeIP IPv4 route after Mihomo starts when Docker `host-tun` and Mihomo TUN mode are active; when IPv6 is enabled in the setup config, they also restore the FakeIP IPv6 route. They also try to disable `rp_filter` on the default egress interface. If `/proc/sys` is read-only, your firewall service replays routing rules, or you are troubleshooting an older build, keep the manual commands below as a fallback. MSF does not automatically restart `firewalld`, `nftables`, or `ufw`.
 
 First verify the workaround on the Docker host:
 
 ```bash
 sudo ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1
+# If IPv6 is enabled:
+sudo ip -6 route replace f2b0::/18 dev mihomo src f2b0::1
 
 IFACE="$(ip -4 route show default | awk '/default/ {print $5; exit}')"
 echo 0 | sudo tee "/proc/sys/net/ipv4/conf/$IFACE/rp_filter" >/dev/null
@@ -299,6 +301,8 @@ Confirm that FakeIP traffic uses `mihomo`:
 
 ```bash
 ip route get 28.0.0.13
+# If IPv6 is enabled:
+ip -6 route get f2b0::13
 cat "/proc/sys/net/ipv4/conf/$IFACE/rp_filter"
 ```
 
@@ -306,20 +310,26 @@ Expected output:
 
 ```text
 28.0.0.13 dev mihomo src 28.0.0.1
+f2b0::13 dev mihomo src f2b0::1
 0
 ```
 
-The temporary route can disappear after the container, Mihomo, or host restarts. To keep it persistent, create a systemd timer on the Docker host. It periodically checks whether the `mihomo` interface exists, then restores the FakeIP route and disables `rp_filter` on the default egress interface:
+The temporary route can disappear after the container, Mihomo, or host restarts. To keep it persistent, create a systemd timer on the Docker host. It periodically checks whether the `mihomo` interface exists, then restores the FakeIP route and disables `rp_filter` on the default egress interface. If IPv6 is enabled, change `ENABLE_IPV6=0` in the script to `ENABLE_IPV6=1`:
 
 ```bash
 sudo tee /usr/local/sbin/msf-host-tun-route >/dev/null <<'EOF'
 #!/bin/sh
 set -eu
 
+ENABLE_IPV6=0
+
 ip link show mihomo >/dev/null 2>&1 || exit 0
 
 IFACE="$(ip -4 route show default | awk '/default/ {print $5; exit}')"
 ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1
+if [ "$ENABLE_IPV6" = "1" ]; then
+  ip -6 route replace f2b0::/18 dev mihomo src f2b0::1
+fi
 
 if [ -n "$IFACE" ] && [ -w "/proc/sys/net/ipv4/conf/$IFACE/rp_filter" ]; then
   echo 0 > "/proc/sys/net/ipv4/conf/$IFACE/rp_filter"

@@ -321,11 +321,11 @@ func TestDockerTunPreflightSkipsTProxyRedirectPorts(t *testing.T) {
 	}
 }
 
-func TestDockerHostTunRouteFixAppliesFakeIPRoute(t *testing.T) {
+func TestDockerHostTunRouteFixAppliesFakeIPRoutes(t *testing.T) {
 	t.Setenv("MSF_RUNTIME", "docker")
 	t.Setenv("MSF_DOCKER_NETWORK_MODE", "host-tun")
 	app := newTestApp(t)
-	initializeDockerRouteFixSetup(t, app, "tun")
+	initializeDockerRouteFixSetup(t, app, "tun", true)
 
 	var commands []string
 	stubDockerHostTunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -347,12 +347,40 @@ func TestDockerHostTunRouteFixAppliesFakeIPRoute(t *testing.T) {
 	for _, want := range []string{
 		"ip link show mihomo",
 		"ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1",
+		"ip -6 route replace f2b0::/18 dev mihomo src f2b0::1",
 		"ip -4 route show default",
 		`sh -c printf 0 > "$1" sh /proc/sys/net/ipv4/conf/ens18/rp_filter`,
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("host-tun route fix commands missing %q:\n%s", want, joined)
 		}
+	}
+}
+
+func TestDockerHostTunRouteFixSkipsIPv6WhenDisabled(t *testing.T) {
+	t.Setenv("MSF_RUNTIME", "docker")
+	t.Setenv("MSF_DOCKER_NETWORK_MODE", "host-tun")
+	app := newTestApp(t)
+	initializeDockerRouteFixSetup(t, app, "tun", false)
+
+	var commands []string
+	stubDockerHostTunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		cmd := strings.Join(append([]string{name}, args...), " ")
+		commands = append(commands, cmd)
+		if cmd == "ip -4 route show default" {
+			return []byte("default via 10.10.10.2 dev ens18 proto dhcp src 10.10.10.12\n"), nil
+		}
+		return nil, nil
+	})
+
+	app.applyDockerHostTunRouteFixWithWait(0)
+
+	joined := strings.Join(commands, "\n")
+	if !strings.Contains(joined, "ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1") {
+		t.Fatalf("IPv4 route should still be applied:\n%s", joined)
+	}
+	if strings.Contains(joined, "ip -6 route replace") {
+		t.Fatalf("IPv6 route should not run when enableIPv6=false:\n%s", joined)
 	}
 }
 
@@ -436,6 +464,70 @@ func TestDockerHostTunRouteFixToleratesCommandFailures(t *testing.T) {
 		}
 		if !strings.Contains(joined, "/proc/sys/net/ipv4/conf/ens18/rp_filter") {
 			t.Fatalf("rp_filter update should be attempted:\n%s", joined)
+		}
+	})
+
+	t.Run("ipv6 route failure", func(t *testing.T) {
+		t.Setenv("MSF_RUNTIME", "docker")
+		t.Setenv("MSF_DOCKER_NETWORK_MODE", "host-tun")
+		app := newTestApp(t)
+		initializeDockerRouteFixSetup(t, app, "tun", true)
+
+		var commands []string
+		stubDockerHostTunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			cmd := strings.Join(append([]string{name}, args...), " ")
+			commands = append(commands, cmd)
+			switch {
+			case cmd == "ip link show mihomo":
+				return nil, nil
+			case cmd == "ip -4 route show default":
+				return []byte("default via 10.10.10.2 dev ens18 proto dhcp src 10.10.10.12\n"), nil
+			case strings.HasPrefix(cmd, "ip -6 route replace"):
+				return []byte("IPv6 is disabled"), errors.New("ipv6 disabled")
+			default:
+				return nil, nil
+			}
+		})
+
+		app.applyDockerHostTunRouteFixWithWait(0)
+		joined := strings.Join(commands, "\n")
+		for _, want := range []string{
+			"ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1",
+			"ip -6 route replace f2b0::/18 dev mihomo src f2b0::1",
+			"/proc/sys/net/ipv4/conf/ens18/rp_filter",
+		} {
+			if !strings.Contains(joined, want) {
+				t.Fatalf("route fix should continue after IPv6 failure, missing %q:\n%s", want, joined)
+			}
+		}
+	})
+
+	t.Run("invalid ipv6 fake ip range", func(t *testing.T) {
+		t.Setenv("MSF_RUNTIME", "docker")
+		t.Setenv("MSF_DOCKER_NETWORK_MODE", "host-tun")
+		app := newTestApp(t)
+		initializeDockerRouteFixSetup(t, app, "tun", true)
+		if _, err := app.DB.Exec(`update system_setups set fake_ip_range_v6 = 'not-a-cidr'`); err != nil {
+			t.Fatal(err)
+		}
+
+		var commands []string
+		stubDockerHostTunCommand(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			cmd := strings.Join(append([]string{name}, args...), " ")
+			commands = append(commands, cmd)
+			if cmd == "ip -4 route show default" {
+				return []byte("default via 10.10.10.2 dev ens18 proto dhcp src 10.10.10.12\n"), nil
+			}
+			return nil, nil
+		})
+
+		app.applyDockerHostTunRouteFixWithWait(0)
+		joined := strings.Join(commands, "\n")
+		if !strings.Contains(joined, "ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1") {
+			t.Fatalf("IPv4 route should still run when IPv6 range is invalid:\n%s", joined)
+		}
+		if strings.Contains(joined, "ip -6 route replace") {
+			t.Fatalf("IPv6 route should be skipped for invalid fake_ip_range_v6:\n%s", joined)
 		}
 	})
 }
@@ -549,8 +641,12 @@ func stringSliceContainsAny(value any, want string) bool {
 	return false
 }
 
-func initializeDockerRouteFixSetup(t *testing.T, app *App, proxyMode string) {
+func initializeDockerRouteFixSetup(t *testing.T, app *App, proxyMode string, enableIPv6 ...bool) {
 	t.Helper()
+	ipv6 := false
+	if len(enableIPv6) > 0 {
+		ipv6 = enableIPv6[0]
+	}
 	body := map[string]any{
 		"username":           "root",
 		"password":           "test-password-123",
@@ -561,7 +657,7 @@ func initializeDockerRouteFixSetup(t *testing.T, app *App, proxyMode string) {
 		"mosdnsEnabled":      true,
 		"mihomo_core_type":   "meta",
 		"linux_proxy_mode":   proxyMode,
-		"enableIPv6":         false,
+		"enableIPv6":         ipv6,
 		"auto_set_dns":       true,
 	}
 	res := requestJSON(t, app, http.MethodPost, "/api/v1/setup/initialize", "", body)

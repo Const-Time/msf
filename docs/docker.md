@@ -257,7 +257,7 @@ MSF 地址按网络模式选择：
 | Docker 模式 | 路由器应指向 |
 |---|---|
 | `host-tun` | Docker 宿主机 LAN IP |
-| `macvlan-tun` | 容器独立 LAN IPv4 |
+| `macvlan-tun` | 容器独立 LAN IPv4；启用 IPv6 时还需要容器可路由 IPv6 |
 
 默认 FakeIP 网段：
 
@@ -266,18 +266,20 @@ MSF 地址按网络模式选择：
 | IPv4 | `28.0.0.0/8` |
 | IPv6 | `f2b0::/18` |
 
-macvlan 首版只承诺 IPv4 接入。完整教程见 [路由器接入总览](guide/zh/router-integration.md)。
+macvlan 默认验收仍以 IPv4 为主。若启用 IPv6，需要容器拥有可被主路由访问的 IPv6，并在主路由上把 `f2b0::/18` 指向这个容器 IPv6。完整教程见 [路由器接入总览](guide/zh/router-integration.md)。
 
 ### host-tun FakeIP 路由持久化
 
-`host-tun` 共享 Docker 宿主机网络命名空间。主路由把 `28.0.0.0/8` 静态路由指向 Docker 宿主机后，宿主机还必须把完整 FakeIP 网段交给 Mihomo TUN。部分环境里 Mihomo 只会给 `mihomo` 接口生成 `28.0.0.0/30`，这只能覆盖 `28.0.0.0` 到 `28.0.0.3`，客户端拿到 `28.0.0.13` 这类 FakeIP 时就不会进入 TUN。
+`host-tun` 共享 Docker 宿主机网络命名空间。主路由把 `28.0.0.0/8` 静态路由指向 Docker 宿主机后，宿主机还必须把完整 IPv4 FakeIP 网段交给 Mihomo TUN；启用 IPv6 时，`f2b0::/18` 也需要同样指向 Mihomo TUN。部分环境里 Mihomo 只会给 `mihomo` 接口生成 `28.0.0.0/30`，这只能覆盖 `28.0.0.0` 到 `28.0.0.3`，客户端拿到 `28.0.0.13` 这类 FakeIP 时就不会进入 TUN。
 
-新版本会在 Docker `host-tun` + Mihomo TUN 模式下，在 Mihomo 启动成功后自动补齐这条 FakeIP IPv4 路由，并尝试关闭默认出口网卡的 `rp_filter`。如果宿主机 `/proc/sys` 只读、系统防火墙重放了路由规则，或你正在排查旧版本问题，可以继续使用下面的手工命令作为 fallback。程序不会自动重启 `firewalld`、`nftables` 或 `ufw`。
+新版本会在 Docker `host-tun` + Mihomo TUN 模式下，在 Mihomo 启动成功后自动补齐 FakeIP IPv4 路由；如果配置中启用了 IPv6，也会自动补齐 FakeIP IPv6 路由。程序还会尝试关闭默认出口网卡的 `rp_filter`。如果宿主机 `/proc/sys` 只读、系统防火墙重放了路由规则，或你正在排查旧版本问题，可以继续使用下面的手工命令作为 fallback。程序不会自动重启 `firewalld`、`nftables` 或 `ufw`。
 
 先在 Docker 宿主机上临时验证：
 
 ```bash
 sudo ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1
+# 如果启用了 IPv6:
+sudo ip -6 route replace f2b0::/18 dev mihomo src f2b0::1
 
 IFACE="$(ip -4 route show default | awk '/default/ {print $5; exit}')"
 echo 0 | sudo tee "/proc/sys/net/ipv4/conf/$IFACE/rp_filter" >/dev/null
@@ -299,6 +301,8 @@ fi
 
 ```bash
 ip route get 28.0.0.13
+# 如果启用了 IPv6:
+ip -6 route get f2b0::13
 cat "/proc/sys/net/ipv4/conf/$IFACE/rp_filter"
 ```
 
@@ -306,20 +310,26 @@ cat "/proc/sys/net/ipv4/conf/$IFACE/rp_filter"
 
 ```text
 28.0.0.13 dev mihomo src 28.0.0.1
+f2b0::13 dev mihomo src f2b0::1
 0
 ```
 
-临时命令在容器、Mihomo 或宿主机重启后可能丢失。需要持久化时，在 Docker 宿主机上创建 systemd 定时任务。它会定期检查 `mihomo` 接口是否存在，存在时补齐 FakeIP 路由并关闭出口网卡 `rp_filter`：
+临时命令在容器、Mihomo 或宿主机重启后可能丢失。需要持久化时，在 Docker 宿主机上创建 systemd 定时任务。它会定期检查 `mihomo` 接口是否存在，存在时补齐 FakeIP 路由并关闭出口网卡 `rp_filter`。如果启用了 IPv6，把脚本里的 `ENABLE_IPV6=0` 改为 `ENABLE_IPV6=1`：
 
 ```bash
 sudo tee /usr/local/sbin/msf-host-tun-route >/dev/null <<'EOF'
 #!/bin/sh
 set -eu
 
+ENABLE_IPV6=0
+
 ip link show mihomo >/dev/null 2>&1 || exit 0
 
 IFACE="$(ip -4 route show default | awk '/default/ {print $5; exit}')"
 ip route replace 28.0.0.0/8 dev mihomo src 28.0.0.1
+if [ "$ENABLE_IPV6" = "1" ]; then
+  ip -6 route replace f2b0::/18 dev mihomo src f2b0::1
+fi
 
 if [ -n "$IFACE" ] && [ -w "/proc/sys/net/ipv4/conf/$IFACE/rp_filter" ]; then
   echo 0 > "/proc/sys/net/ipv4/conf/$IFACE/rp_filter"

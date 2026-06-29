@@ -7,22 +7,26 @@
 #### 修复
 
 - Docker `host-tun` + Mihomo TUN 启动后自动补齐 FakeIP IPv4 路由，例如 `28.0.0.0/8 dev mihomo src 28.0.0.1`，避免客户端 FakeIP 流量到达 Docker 宿主机后没有进入 `mihomo` TUN。
+- Docker `host-tun` + Mihomo TUN 在显式启用 IPv6 时自动补齐 FakeIP IPv6 路由，例如 `f2b0::/18 dev mihomo src f2b0::1`；IPv4 / IPv6 任一路由修复失败都只写 warning，不阻断服务启动。
 - Docker `host-tun` + Mihomo TUN 会尝试关闭默认出口网卡的 `rp_filter`；失败时只写 warning，不阻断 Mihomo 启动。
 
 #### 说明
 
 - 程序不会自动重启 `firewalld`、`nftables` 或 `ufw`。如果防火墙服务会缓存或重放规则，仍需按 Docker 文档手动重启对应防火墙服务。
+- Docker IPv6 默认仍保持关闭；只有用户显式启用 IPv6 后才会生成并修复 `f2b0::/18`。
 
 ### English
 
 #### Fixed
 
 - Docker `host-tun` + Mihomo TUN now restores the FakeIP IPv4 route after Mihomo starts, for example `28.0.0.0/8 dev mihomo src 28.0.0.1`, so client FakeIP traffic reaching the Docker host can enter the `mihomo` TUN interface.
+- Docker `host-tun` + Mihomo TUN now restores the FakeIP IPv6 route when IPv6 is explicitly enabled, for example `f2b0::/18 dev mihomo src f2b0::1`; IPv4 and IPv6 route failures are logged as warnings and do not fail service startup.
 - Docker `host-tun` + Mihomo TUN now tries to disable `rp_filter` on the default egress interface; failures are logged as warnings and do not fail Mihomo startup.
 
 #### Notes
 
 - MSF does not automatically restart `firewalld`, `nftables`, or `ufw`. If a firewall service caches or replays rules, restart the active firewall service manually as documented in the Docker guide.
+- Docker IPv6 remains disabled by default; `f2b0::/18` is generated and repaired only after the user explicitly enables IPv6.
 
 ## v0.3.8 - 2026-06-27
 
